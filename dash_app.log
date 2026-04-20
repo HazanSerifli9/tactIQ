@@ -1,0 +1,47 @@
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:70: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['x_plot_m'] = opta_to_meters_x(df['x'])
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:71: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['y_plot_m'] = opta_to_meters_y(df['y'])
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:72: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['pass_end_x_plot_m'] = opta_to_meters_x(df['Pass End X'])
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:73: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['pass_end_y_plot_m'] = opta_to_meters_y(df['Pass End Y'])
+Dash is running on http://127.0.0.1:8050/
+
+ * Serving Flask app 'app'
+ * Debug mode: on
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:70: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['x_plot_m'] = opta_to_meters_x(df['x'])
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:71: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['y_plot_m'] = opta_to_meters_y(df['y'])
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:72: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['pass_end_x_plot_m'] = opta_to_meters_x(df['Pass End X'])
+/Users/hazanserifli/Desktop/tactıq/pages/transitions_animation.py:73: PerformanceWarning: DataFrame is highly fragmented.  This is usually the result of calling `frame.insert` many times, which has poor performance.  Consider joining all columns at once using pd.concat(axis=1) instead. To get a de-fragmented frame, use `newframe = frame.copy()`
+  df['pass_end_y_plot_m'] = opta_to_meters_y(df['Pass End Y'])
+Traceback (most recent call last):
+  File "/Users/hazanserifli/Desktop/tactıq/app.py", line 41, in <module>
+    app.run(debug=True)
+    ~~~~~~~^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/dash/dash.py", line 2529, in run
+    self.server.run(host=host, port=port, debug=debug, **flask_run_options)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/flask/app.py", line 662, in run
+    run_simple(t.cast(str, host), port, self, **options)
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/werkzeug/serving.py", line 1115, in run_simple
+    run_with_reloader(
+    ~~~~~~~~~~~~~~~~~^
+        srv.serve_forever,
+        ^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        reloader_type=reloader_type,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/opt/homebrew/lib/python3.14/site-packages/werkzeug/_reloader.py", line 453, in run_with_reloader
+    ensure_echo_on()
+    ~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/lib/python3.14/site-packages/werkzeug/_reloader.py", line 433, in ensure_echo_on
+    termios.tcsetattr(sys.stdin, termios.TCSANOW, attributes)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+termios.error: (4, 'Interrupted system call')

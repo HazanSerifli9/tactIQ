@@ -1,0 +1,26 @@
+# Data files - private
+raw_data/
+
+# Logos & assets - private
+assets/
+göztepehub/assets/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Environment
+.env
+*.env
+venv/
+.venv/
+
+# OS
+.DS_Store
+
+# Models (large files)
+utils/tactiq_xg_model.json
+utils/tactiq_obv_for_model.json
+utils/tactiq_obv_against_model.json
