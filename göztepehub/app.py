@@ -21,7 +21,7 @@ def navbar():
     return html.Nav([
         html.A([
             html.Img(src="/assets/logo.png", style={"height": "40px", "marginRight": "10px"}), 
-            html.Span("TactIQ", className="logo-text")
+            html.Span("tactIQ", className="logo-text")
         ], href="http://127.0.0.1:8050/", className="d-flex align-items-center text-decoration-none me-auto"), 
 
         html.Div([

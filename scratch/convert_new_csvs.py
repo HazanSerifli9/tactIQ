@@ -11,7 +11,7 @@ if __name__ == "__main__":
     csv_dir = "/Users/hazanserifli/Desktop/tactıq/raw_data/csv"
     output_dir = "/Users/hazanserifli/Desktop/tactıq/raw_data"
     
-    files_to_convert = ["alanya-ts.csv", "başakşehir-gençlerbirliği.csv","göztepe-kasımpaşa.csv", "gs-kocaeli.csv","kayseri-fb.csv","konya-fatih.csv"]
+    files_to_convert = ["antalya-konya.csv", "eyup-samsun.csv","fatih-eyup.csv", "fb-rize.csv","gaziantep-kayseri.csv","gençlerbirliği-gs.csv","kasımpasa-alanya.csv","kocaeli-göztepe.csv","rize-gaziantep.csv","samsun-bjk.csv","ts-başakşehir.csv"]
     
     for filename in files_to_convert:
         csv_path = os.path.join(csv_dir, filename)

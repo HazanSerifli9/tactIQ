@@ -5,7 +5,7 @@ import dash_bootstrap_components as dbc
 FONT_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Oswald:wght@500;700&display=swap"
 
 app = Dash(__name__, use_pages=True, suppress_callback_exceptions=True, external_stylesheets=[dbc.themes.DARKLY, FONT_URL])
-app.title = "TactIQ"
+app.title = "tactIQ"
 server = app.server
 
 def navbar():

@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 import os
+import threading
 
 from utils.data import get_data_dir
 
@@ -21,6 +22,9 @@ END_EVENTS = SHOT_EVENTS | {'Out', 'Offside Pass', 'Foul throw-in'}
 
 # Cache for loaded match data
 _OPPONENT_MATCHES_CACHE = {}
+
+# Cache for fully-analyzed buildup results (expensive computation)
+_BUILDUP_ANALYSIS_CACHE = {}
 
 
 def _load_opponent_matches(team_name):
@@ -61,16 +65,18 @@ def _get_zone(y):
         return 'Right'
 
 
-def _extract_possession_sequences(df, team_name):
+def _extract_possession_sequences(records, team_name):
     """
-    Extract possession sequences for a given team from a match DataFrame.
-    Returns list of sequences, each being a list of row dicts.
+    Extract possession sequences from a pre-converted list of row dicts.
+    Returns list of (seq, end_record_idx) tuples where end_record_idx is the
+    position of the last event in `records` for that sequence.
     """
     sequences = []
     current_seq = []
     current_team = None
+    current_end_idx = -1
 
-    for _, row in df.iterrows():
+    for i, row in enumerate(records):
         if row['event'] in SKIP_EVENTS:
             continue
 
@@ -78,21 +84,23 @@ def _extract_possession_sequences(df, team_name):
 
         if team != current_team:
             if current_seq and current_team == team_name:
-                sequences.append(current_seq)
-            current_seq = [row.to_dict()]
+                sequences.append((current_seq, current_end_idx))
+            current_seq = [row]
             current_team = team
+            current_end_idx = i
         else:
-            current_seq.append(row.to_dict())
+            current_seq.append(row)
+            current_end_idx = i
 
         if row['event'] in END_EVENTS:
             if current_seq and current_team == team_name:
-                sequences.append(current_seq)
+                sequences.append((current_seq, current_end_idx))
             current_seq = []
             current_team = None
+            current_end_idx = -1
 
-    # Don't forget last sequence
     if current_seq and current_team == team_name:
-        sequences.append(current_seq)
+        sequences.append((current_seq, current_end_idx))
 
     return sequences
 
@@ -184,26 +192,22 @@ def _analyze_post_turnover(df, team_name, seq):
 
     last_ev = seq[-1]
     turnover_time = last_ev['time_min'] * 60 + last_ev['time_sec']
-    turnover_idx = None
 
-    # Find the index of the last event in the original dataframe
-    for idx, row in df.iterrows():
-        if (row['time_min'] == last_ev['time_min'] and
-            row['time_sec'] == last_ev['time_sec'] and
-            row['event'] == last_ev['event']):
-            turnover_idx = idx
-            break
-
-    if turnover_idx is None:
+    mask = (
+        (df['time_min'] == last_ev['time_min']) &
+        (df['time_sec'] == last_ev['time_sec']) &
+        (df['event'] == last_ev['event'])
+    )
+    matching = df.index[mask]
+    if len(matching) == 0:
         return False
+    turnover_idx = matching[0]
 
-    # Look at events after turnover
     subsequent = df.loc[turnover_idx + 1:]
-    for _, row in subsequent.iterrows():
+    for row in subsequent.to_dict('records'):
         ev_time = row['time_min'] * 60 + row['time_sec']
         if ev_time - turnover_time > 15:
             break
-        # Opponent events reaching team's final third
         if row['team_name'] != team_name and row['x'] > 66.6:
             return True
         if row['event'] in SHOT_EVENTS and row['team_name'] != team_name:
@@ -404,18 +408,37 @@ def analyze_buildup_for_match(df, team_name):
     Analyze all build-up sequences for a team in a single match.
     Returns a summary dict.
     """
-    sequences = _extract_possession_sequences(df, team_name)
-    buildups = []
+    records = df.to_dict('records')
+    seq_with_idx = _extract_possession_sequences(records, team_name)
 
-    for seq in sequences:
+    # First pass: analyze each sequence, collecting (result, end_record_idx)
+    raw_buildups = []
+    for seq, end_idx in seq_with_idx:
         result = _analyze_buildup_sequence(seq)
         if result is not None:
-            # Check post-turnover danger
-            if result['turnover']:
-                result['opp_f3_after_turnover'] = _analyze_post_turnover(df, team_name, seq)
-            else:
-                result['opp_f3_after_turnover'] = False
-            buildups.append(result)
+            raw_buildups.append((result, end_idx))
+
+    # Batch compute post-turnover danger in a single forward pass per turnover.
+    # For each turnover sequence, scan forward in records from its end position.
+    # This avoids N separate vectorized mask operations on the dataframe.
+    danger_indices = set()
+    for i, (result, end_idx) in enumerate(raw_buildups):
+        if not result['turnover'] or end_idx < 0:
+            continue
+        turnover_time = records[end_idx]['time_min'] * 60 + records[end_idx]['time_sec']
+        for j in range(end_idx + 1, len(records)):
+            ev = records[j]
+            ev_time = ev['time_min'] * 60 + ev['time_sec']
+            if ev_time - turnover_time > 15:
+                break
+            if ev['team_name'] != team_name and (ev['x'] > 66.6 or ev['event'] in SHOT_EVENTS):
+                danger_indices.add(i)
+                break
+
+    buildups = []
+    for i, (result, _) in enumerate(raw_buildups):
+        result['opp_f3_after_turnover'] = (i in danger_indices)
+        buildups.append(result)
 
     if not buildups:
         return None
@@ -494,9 +517,13 @@ def get_opponent_buildup_analysis(team_name):
     (excluding Göztepe matches).
     Returns a list of match analysis dicts + a season summary.
     """
+    if team_name in _BUILDUP_ANALYSIS_CACHE:
+        return _BUILDUP_ANALYSIS_CACHE[team_name]
+
     match_dfs = _load_opponent_matches(team_name)
 
     if not match_dfs:
+        _BUILDUP_ANALYSIS_CACHE[team_name] = ([], None)
         return [], None
 
     match_analyses = []
@@ -509,6 +536,7 @@ def get_opponent_buildup_analysis(team_name):
     match_analyses.sort(key=lambda x: x['week'])
 
     if not match_analyses:
+        _BUILDUP_ANALYSIS_CACHE[team_name] = ([], None)
         return [], None
 
     # Aggregate all coordinates for the season summary
@@ -554,6 +582,7 @@ def get_opponent_buildup_analysis(team_name):
         'coords': all_coords,
     }
 
+    _BUILDUP_ANALYSIS_CACHE[team_name] = (match_analyses, season_summary)
     return match_analyses, season_summary
 
 def get_opponent_matches_list(team_name):
@@ -599,3 +628,21 @@ def get_single_match_buildups(filename, team_name):
     except Exception as e:
         print(f"Error loading {filename}: {e}")
         return None
+
+
+def _precompute_all_teams():
+    """Precompute buildup analysis for all teams in background at startup."""
+    try:
+        from utils.data import extract_fixture_data, calculate_standings
+        matches = extract_fixture_data(lite=True)
+        standings = calculate_standings(matches)
+        teams = [t for t in standings['Team'].unique() if t != GOZTEPE]
+        for team in teams:
+            if team not in _BUILDUP_ANALYSIS_CACHE:
+                get_opponent_buildup_analysis(team)
+    except Exception:
+        pass
+
+
+_precompute_thread = threading.Thread(target=_precompute_all_teams, daemon=True)
+_precompute_thread.start()
