@@ -100,7 +100,7 @@ def layout():
                     html.Div(
                         className="footer-inner",
                         children=[
-                            html.Div("© TactIQ — Precision analytics for Süper Lig.", className="footer-text"),
+                            html.Div("© tactIQ — Precision analytics for Süper Lig.", className="footer-text"),
                             html.Img(src=superlig_logo_src, className="superlogo", alt="Süper Lig"),
                         ],
                     )

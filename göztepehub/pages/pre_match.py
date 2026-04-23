@@ -1,712 +1,1084 @@
 import dash
-from dash import html, dcc, callback, Input, Output, State
-import dash_bootstrap_components as dbc
-import pandas as pd
 import numpy as np
+from dash import html, dcc, callback, Input, Output
+import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
-import plotly.express as px
-from utils.data import extract_fixture_data, calculate_standings, get_match_dataframe
-import utils.metrics as metrics
+from utils.data import extract_fixture_data, calculate_standings
 from göztepehub.utils import buildup_analysis
-from göztepehub.utils import defensive_analysis
-from göztepehub.utils import xg_chain_analysis
-import utils.visuals as visuals
-from göztepehub.utils.game_phases import get_phase_metrics, LOWER_IS_BETTER
-
-
-def _aggregate_f3_stats(match_analyses):
-    """Aggregate f3_entry_stats from a list of per-match analysis dicts."""
-    buckets = []
-    for m in (match_analyses or []):
-        fs = m.get('f3_entry_stats')
-        if not fs:
-            continue
-        total = fs.get('total_entries', 0)
-        if total == 0:
-            continue
-        em = fs.get('entry_method', {})
-        ez = fs.get('entry_zone', {})
-        sub = fs.get('subsequent', {})
-        buckets.append({
-            'total': total,
-            'sp': em.get('short_pass', 0),
-            'dp': em.get('deep_pass', 0),
-            'ca': em.get('carry', 0),
-            'lf': ez.get('left', 0),
-            'ce': ez.get('center', 0),
-            'ri': ez.get('right', 0),
-            'bc': sub.get('box_control', 0),
-            'cr': sub.get('cross', 0),
-            'ae': sub.get('aerial_won', 0),
-        })
-    if not buckets:
-        return None
-    total = sum(b['total'] for b in buckets)
-    if total == 0:
-        return None
-    def pct(n):
-        return round((n / total) * 100, 1)
-    return {
-        'total': total,
-        'entry_method': {
-            'short_pass_pct': pct(sum(b['sp'] for b in buckets)),
-            'deep_pass_pct':  pct(sum(b['dp'] for b in buckets)),
-            'carry_pct':      pct(sum(b['ca'] for b in buckets)),
-        },
-        'entry_zone': {
-            'left_pct':   pct(sum(b['lf'] for b in buckets)),
-            'center_pct': pct(sum(b['ce'] for b in buckets)),
-            'right_pct':  pct(sum(b['ri'] for b in buckets)),
-        },
-        'subsequent': {
-            'box_control_pct': pct(sum(b['bc'] for b in buckets)),
-            'cross_pct':       pct(sum(b['cr'] for b in buckets)),
-            'aerial_won_pct':  pct(sum(b['ae'] for b in buckets)),
-        },
-    }
+from göztepehub.utils.xg_chain_analysis import analyze_opponent_xg_profile
+from göztepehub.utils.game_phases import get_phase_metrics, LOWER_IS_BETTER, _load_all_team_events
+from göztepehub.utils.advanced_tactics import (
+    identify_playmaker, analyze_15s_rule, analyze_xg_chain_origins, get_goal_typologies
+)
+from göztepehub.utils.defensive_analysis import get_opponent_defensive_profile
+from göztepehub.utils.transitions_analysis import get_opponent_transition_profile
 
 dash.register_page(__name__, path='/pre-match', title='Göztepe Hub | Pre-Match')
 
 GOZTEPE = 'Göztepe Spor Kulübü'
 
-def _comparison_card(label, goz_val, opp_val, lower_is_better=False):
+TAB_TO_PHASE = {
+    'offensive-tab':  'Offensive',
+    'defensive-tab':  'Defensive',
+    'off-trans-tab':  'Off. Transitions',
+    'def-trans-tab':  'Def. Transitions',
+}
+TAB_LABELS = {
+    'offensive-tab':  'Offensive',
+    'defensive-tab':  'Defensive',
+    'off-trans-tab':  'Off. Transitions',
+    'def-trans-tab':  'Def. Transitions',
+}
+
+_SUFFIXES = ['Spor Kulübü', 'Futbol Kulübü', 'Kulübü', 'Spor A.Ş.', 'A.Ş.', 'S.K.', 'F.K.', 'SK']
+
+def _clean(name):
+    result = name
+    for s in _SUFFIXES:
+        result = result.replace(s, '')
+    return result.strip()
+
+
+# ──────────────────────────────────────────────────────────────
+# UI helpers
+# ──────────────────────────────────────────────────────────────
+
+def _section_card(*children, title=None, icon=""):
+    header = []
+    if title:
+        header = [html.Div(className="goz-section-header", style={"marginBottom": "16px"}, children=[
+            html.Span(f"{icon}  {title}" if icon else title, className="goz-card-title")
+        ])]
+    return html.Div(className="goz-form-section", style={"marginBottom": "16px"},
+                    children=header + list(children))
+
+
+def _stat_pill(label, value, color="var(--accent-gold)", sub=None):
+    return html.Div(style={
+        "textAlign": "center", "padding": "14px 12px",
+        "background": "rgba(255,255,255,0.04)",
+        "borderRadius": "12px", "border": "1px solid var(--border-color)",
+        "flex": "1", "minWidth": "80px",
+    }, children=[
+        html.Div(str(value), style={
+            "fontSize": "1.5rem", "fontWeight": "700", "color": color, "lineHeight": "1"
+        }),
+        html.Div(label, style={
+            "fontSize": "0.68rem", "color": "var(--text-secondary)",
+            "marginTop": "5px", "textTransform": "uppercase", "letterSpacing": "0.5px"
+        }),
+        *([] if sub is None else [html.Div(str(sub), style={
+            "fontSize": "0.65rem", "color": "var(--text-secondary)", "marginTop": "2px"
+        })]),
+    ])
+
+
+def _bar_row(label, pct, color="var(--accent-gold)"):
+    try:
+        pct = float(str(pct).replace('%', '').strip())
+    except Exception:
+        pct = 0
+    pct = min(max(pct, 0), 100)
+    return html.Div(style={"marginBottom": "9px"}, children=[
+        html.Div(style={"display": "flex", "justifyContent": "space-between", "marginBottom": "4px"}, children=[
+            html.Span(label, style={"fontSize": "0.78rem", "color": "var(--text-secondary)"}),
+            html.Span(f"{pct:.0f}%", style={"fontSize": "0.78rem", "fontWeight": "700", "color": color}),
+        ]),
+        html.Div(style={"height": "4px", "background": "rgba(255,255,255,0.07)", "borderRadius": "2px"}, children=[
+            html.Div(style={"width": f"{pct}%", "height": "100%", "background": color, "borderRadius": "2px"}),
+        ])
+    ])
+
+
+# ──────────────────────────────────────────────────────────────
+# Pitch drawing (Plotly)
+# ──────────────────────────────────────────────────────────────
+
+_PITCH_BG = "#0e1b0f"
+_LINE_C   = "rgba(255,255,255,0.55)"
+_GOLD     = "#fbbf24"
+_RED      = "#ef4444"
+_BLUE     = "#3b82f6"
+_PURPLE   = "#a855f7"
+_GREEN    = "rgba(34,197,94,0.9)"
+
+
+def _make_pitch_fig(x0=0, x1=100, show_f3=False, height=200):
+    """Full-featured plotly football pitch."""
+    lc  = _LINE_C
+    lc2 = "rgba(255,255,255,0.25)"   # secondary lines
+
+    shapes = [
+        # Pitch fill + outer border
+        dict(type="rect", x0=x0, y0=0, x1=x1, y1=100,
+             line=dict(color=lc, width=1.5), fillcolor=_PITCH_BG, layer="below"),
+    ]
+
+    # ── Halfway line (full pitch only) ──────────────────
+    if x0 == 0 and x1 == 100:
+        shapes.append(dict(type="line", x0=50, y0=0, x1=50, y1=100,
+                           line=dict(color=lc, width=1)))
+
+    # ── F3 dashed marker ────────────────────────────────
+    if show_f3 and x0 <= 66.67 <= x1:
+        shapes.append(dict(type="line", x0=66.67, y0=0, x1=66.67, y1=100,
+                           line=dict(color="rgba(251,191,36,0.4)", width=1, dash="dot")))
+
+    # ── Left penalty area (own goal end) ────────────────
+    if x0 == 0:
+        shapes += [
+            dict(type="rect", x0=0, y0=20.35, x1=15.71, y1=79.65,
+                 line=dict(color=lc, width=1), fillcolor="rgba(0,0,0,0)"),
+            dict(type="rect", x0=0, y0=36.47, x1=5.24, y1=63.53,
+                 line=dict(color=lc2, width=1), fillcolor="rgba(0,0,0,0)"),
+            # Penalty spot
+            dict(type="circle", x0=10.4, y0=49.3, x1=11.6, y1=50.7,
+                 line=dict(color=lc, width=1), fillcolor=lc),
+        ]
+
+    # ── Right penalty area (attacking end) ──────────────
+    if x1 == 100:
+        shapes += [
+            dict(type="rect", x0=84.29, y0=20.35, x1=100, y1=79.65,
+                 line=dict(color=lc, width=1), fillcolor="rgba(0,0,0,0)"),
+            dict(type="rect", x0=94.76, y0=36.47, x1=100, y1=63.53,
+                 line=dict(color=lc2, width=1), fillcolor="rgba(0,0,0,0)"),
+            # Penalty spot
+            dict(type="circle", x0=88.4, y0=49.3, x1=89.6, y1=50.7,
+                 line=dict(color=lc, width=1), fillcolor=lc),
+        ]
+
+    fig = go.Figure()
+    fig.update_layout(
+        shapes=shapes,
+        plot_bgcolor=_PITCH_BG,
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=2, r=2, t=2, b=2),
+        height=height,
+        xaxis=dict(range=[x0 - 1, x1 + 1], showgrid=False, zeroline=False,
+                   showticklabels=False, fixedrange=True),
+        yaxis=dict(range=[-1, 101], showgrid=False, zeroline=False,
+                   showticklabels=False, fixedrange=True),
+        showlegend=True,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            font=dict(color="rgba(255,255,255,0.75)", size=10),
+            bgcolor="rgba(0,0,0,0)", borderwidth=0,
+        ),
+        hovermode='closest',
+    )
+
+    th = np.linspace(0, 2 * np.pi, 72)
+
+    # Center circle (full pitch only)
+    if x0 == 0 and x1 == 100:
+        rx, ry = 8.71, 13.46
+        fig.add_trace(go.Scatter(
+            x=50 + rx * np.cos(th), y=50 + ry * np.sin(th),
+            mode='lines', line=dict(color=lc, width=1),
+            showlegend=False, hoverinfo='skip',
+        ))
+        fig.add_trace(go.Scatter(
+            x=[50], y=[50], mode='markers',
+            marker=dict(color=lc, size=5),
+            showlegend=False, hoverinfo='skip',
+        ))
+
+    # Right penalty arc (D) — visible regardless of x0
+    if x1 == 100:
+        # Arc of the D: starts ~11m from penalty spot (spot at 89, D extends to ~78)
+        arc_angles = np.linspace(np.radians(127), np.radians(233), 40)
+        arc_cx, arc_cy = 89.0, 50.0
+        arc_rx, arc_ry = 10.0, 15.5
+        ax = arc_cx + arc_rx * np.cos(arc_angles)
+        ay = arc_cy + arc_ry * np.sin(arc_angles)
+        # Only draw the part outside the penalty box (x < 84.29)
+        mask = ax < 84.29
+        if mask.any():
+            fig.add_trace(go.Scatter(
+                x=ax[mask], y=ay[mask],
+                mode='lines', line=dict(color=lc2, width=1),
+                showlegend=False, hoverinfo='skip',
+            ))
+
+    # Left penalty arc (D)
+    if x0 == 0:
+        arc_angles = np.linspace(np.radians(-53), np.radians(53), 40)
+        arc_cx, arc_cy = 11.0, 50.0
+        arc_rx, arc_ry = 10.0, 15.5
+        ax = arc_cx + arc_rx * np.cos(arc_angles)
+        ay = arc_cy + arc_ry * np.sin(arc_angles)
+        mask = ax > 15.71
+        if mask.any():
+            fig.add_trace(go.Scatter(
+                x=ax[mask], y=ay[mask],
+                mode='lines', line=dict(color=lc2, width=1),
+                showlegend=False, hoverinfo='skip',
+            ))
+
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────
+# Metric grid card (KPI panel)
+# ──────────────────────────────────────────────────────────────
+
+def _metric_card(label, goz_val, opp_val, goz_name, opp_name, lower_is_better=False):
     try:
         def to_f(v):
             if isinstance(v, str):
-                return float(v.replace('%', '').replace('/ Game', '').strip())
+                return float(v.replace('%', '').strip())
             return float(v)
-        g_num = to_f(goz_val)
-        o_num = to_f(opp_val)
-        goz_better = g_num < o_num if lower_is_better else g_num > o_num
-        is_equal = abs(g_num - o_num) < 0.001
+        g_num, o_num = to_f(goz_val), to_f(opp_val)
         total = g_num + o_num
-        g_bar_pct = round((g_num / total) * 100) if total > 0 else 50
-        o_bar_pct = 100 - g_bar_pct
-    except:
-        goz_better = False
-        is_equal = True
-        g_bar_pct = 50
-        o_bar_pct = 50
+        g_pct = (g_num / total * 100) if total > 0 else 50
+        goz_better = (g_num <= o_num) if lower_is_better else (g_num >= o_num)
+    except Exception:
+        g_pct = 50
+        goz_better = None
 
-    g_color = "#fbbf24" if goz_better else ("rgba(255,255,255,0.5)" if is_equal else "rgba(255,255,255,0.35)")
-    o_color = "#ef4444" if (not goz_better and not is_equal) else ("rgba(255,255,255,0.5)" if is_equal else "rgba(255,255,255,0.35)")
-    g_bar_color = "#fbbf24" if goz_better else "rgba(255,255,255,0.15)"
-    o_bar_color = "#ef4444" if (not goz_better and not is_equal) else "rgba(255,255,255,0.15)"
+    GOZ_C = "var(--accent-gold)"
+    OPP_C = "#ef4444"
+    goz_border = "2px solid rgba(34,197,94,0.6)" if goz_better is True  else "2px solid transparent"
+    opp_border  = "2px solid rgba(34,197,94,0.6)" if goz_better is False else "2px solid transparent"
 
-    return html.Div([
+    def side(name, val, color, border):
+        return html.Div(style={
+            "flex": "1", "textAlign": "center", "padding": "12px 8px",
+            "background": "rgba(255,255,255,0.03)", "borderRadius": "10px", "border": border,
+        }, children=[
+            html.Div(name, style={
+                "fontSize": "0.68rem", "fontWeight": "700", "color": color,
+                "letterSpacing": "0.5px", "marginBottom": "6px",
+                "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis",
+            }),
+            html.Div(str(val), style={
+                "fontSize": "1.45rem", "fontWeight": "700", "color": color, "lineHeight": "1",
+            }),
+        ])
+
+    return html.Div(style={
+        "background": "var(--card-bg)", "border": "1px solid var(--border-color)",
+        "borderRadius": "14px", "padding": "14px",
+    }, children=[
         html.Div(label, style={
-            "fontSize": "0.68rem", "fontWeight": "600", "color": "rgba(255,255,255,0.45)",
-            "textTransform": "uppercase", "letterSpacing": "0.8px", "marginBottom": "8px"
+            "fontSize": "0.72rem", "fontWeight": "600",
+            "color": "var(--text-secondary)", "textTransform": "uppercase",
+            "letterSpacing": "0.5px", "textAlign": "center", "marginBottom": "10px",
         }),
-        html.Div([
-            # Göztepe side
-            html.Div([
-                html.Span(str(goz_val), style={
-                    "fontFamily": "'Oswald', sans-serif", "fontSize": "1.15rem",
-                    "fontWeight": "700", "color": g_color
-                }),
-            ], style={"textAlign": "left", "minWidth": "52px"}),
-            # Progress bar
-            html.Div([
-                html.Div(style={
-                    "width": f"{g_bar_pct}%", "height": "6px",
-                    "background": g_bar_color, "borderRadius": "3px 0 0 3px",
-                    "transition": "width 0.4s ease",
-                }),
-                html.Div(style={
-                    "width": f"{o_bar_pct}%", "height": "6px",
-                    "background": o_bar_color, "borderRadius": "0 3px 3px 0",
-                    "transition": "width 0.4s ease",
-                }),
-            ], style={"display": "flex", "flex": "1", "margin": "0 10px",
-                      "background": "rgba(255,255,255,0.06)", "borderRadius": "3px", "overflow": "hidden"}),
-            # Opponent side
-            html.Div([
-                html.Span(str(opp_val), style={
-                    "fontFamily": "'Oswald', sans-serif", "fontSize": "1.15rem",
-                    "fontWeight": "700", "color": o_color
-                }),
-            ], style={"textAlign": "right", "minWidth": "52px"}),
-        ], style={"display": "flex", "alignItems": "center"}),
-    ], style={
-        "marginBottom": "8px", "padding": "10px 14px",
-        "background": "rgba(255,255,255,0.02)",
-        "borderRadius": "10px",
-        "border": "1px solid rgba(255,255,255,0.06)",
-        "transition": "background 0.2s",
-    })
+        html.Div(style={"display": "flex", "gap": "8px", "alignItems": "stretch"}, children=[
+            side(goz_name, goz_val, GOZ_C, goz_border),
+            html.Div("vs", style={
+                "alignSelf": "center", "fontSize": "0.65rem",
+                "color": "var(--text-secondary)", "flexShrink": "0",
+            }),
+            side(opp_name, opp_val, OPP_C, opp_border),
+        ]),
+        html.Div(style={
+            "height": "4px", "marginTop": "12px",
+            "background": "rgba(255,255,255,0.05)",
+            "borderRadius": "2px", "overflow": "hidden", "display": "flex",
+        }, children=[
+            html.Div(style={"width": f"{g_pct:.1f}%", "background": GOZ_C}),
+            html.Div(style={"width": f"{100-g_pct:.1f}%", "background": "rgba(239,68,68,0.35)"}),
+        ]),
+    ])
+
+
+# ──────────────────────────────────────────────────────────────
+# Offensive deep analysis builder
+# ──────────────────────────────────────────────────────────────
+
+def _build_offensive_analysis(opponent, opp_name):
+    """Returns a list of rich analysis sections for the offensive tab."""
+    sections = []
+
+    # ── 1. BUILD-UP STYLE ──────────────────────────────────────
+    try:
+        analyses, season_summary = buildup_analysis.get_opponent_buildup_analysis(opponent)
+        pt   = season_summary.get('pass_type', {})
+        zone = season_summary.get('zone', {})
+        coords = season_summary.get('coords', [])
+
+        short_pct  = float(pt.get('short_pct', 50))
+        long_pct   = float(pt.get('long_pct',  50))
+        left_pct   = float(zone.get('left_pct',   33))
+        center_pct = float(zone.get('center_pct', 34))
+        right_pct  = float(zone.get('right_pct',  33))
+
+        # Buildup start pitch — color by pass type
+        fig_bu = _make_pitch_fig(show_f3=True, height=210)
+        if coords:
+            short_xs = [c['x'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Short']
+            short_ys = [c['y'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Short']
+            long_xs  = [c['x'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Long']
+            long_ys  = [c['y'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Long']
+            if short_xs:
+                fig_bu.add_trace(go.Scatter(
+                    x=short_xs, y=short_ys, mode='markers',
+                    marker=dict(color=_GOLD, size=5, opacity=0.6, line=dict(width=0)),
+                    name="Short build-up", showlegend=True, hoverinfo='skip',
+                ))
+            if long_xs:
+                fig_bu.add_trace(go.Scatter(
+                    x=long_xs, y=long_ys, mode='markers',
+                    marker=dict(color=_RED, size=5, opacity=0.6, line=dict(width=0)),
+                    name="Long ball", showlegend=True, hoverinfo='skip',
+                ))
+
+        # Aggregate F3 entry data from individual match analyses
+        n_with = 0
+        sp_sum = dp_sum = carry_sum = 0
+        el_sum = ec_sum = er_sum   = 0
+        box_sum = cross_sum        = 0
+        entry_coords = []
+
+        for a in (analyses or []):
+            fes = a.get('f3_entry_stats') if isinstance(a, dict) else None
+            if fes:
+                n_with += 1
+                em = fes.get('entry_method', {})   # flat: short_pass_pct, deep_pass_pct, carry_pct
+                ez = fes.get('entry_zone',   {})   # flat: left_pct, center_pct, right_pct
+                sa = fes.get('subsequent',   {})   # flat: box_control_pct, cross_pct
+                entry_coords.extend(fes.get('entry_coords', []))
+                sp_sum    += em.get('short_pass_pct', 0)
+                dp_sum    += em.get('deep_pass_pct',  0)
+                carry_sum += em.get('carry_pct',      0)
+                el_sum    += ez.get('left_pct',   0)
+                ec_sum    += ez.get('center_pct', 0)
+                er_sum    += ez.get('right_pct',  0)
+                box_sum   += sa.get('box_control_pct', 0)
+                cross_sum += sa.get('cross_pct',        0)
+
+        if n_with:
+            avg_sp    = round(sp_sum    / n_with, 1)
+            avg_dp    = round(dp_sum    / n_with, 1)
+            avg_carry = round(carry_sum / n_with, 1)
+            avg_el    = round(el_sum    / n_with, 1)
+            avg_ec    = round(ec_sum    / n_with, 1)
+            avg_er    = round(er_sum    / n_with, 1)
+            avg_box   = round(box_sum   / n_with, 1)
+            avg_cross = round(cross_sum / n_with, 1)
+        else:
+            avg_sp = avg_dp = avg_carry = avg_el = avg_ec = avg_er = avg_box = avg_cross = 0
+
+        buildup_section = _section_card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={"marginBottom": "16px"}, children=[
+                        html.Div("PASS TYPE", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "letterSpacing": "1px", "marginBottom": "8px",
+                        }),
+                        _bar_row("Short Pass", short_pct, _GOLD),
+                        _bar_row("Long Ball",  long_pct,  _RED),
+                    ]),
+                    html.Div(children=[
+                        html.Div("BUILD-UP ZONE", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "letterSpacing": "1px", "marginBottom": "8px",
+                        }),
+                        _bar_row("Left Channel",   left_pct,   _BLUE),
+                        _bar_row("Central Corridor", center_pct, _GOLD),
+                        _bar_row("Right Channel",  right_pct,  _PURPLE),
+                    ]),
+                ], md=4),
+                dbc.Col([
+                    dcc.Graph(figure=fig_bu, config={'displayModeBar': False},
+                              style={"height": "210px"}),
+                    html.Div("● Build-up starting positions", style={
+                        "fontSize": "0.65rem", "color": "var(--text-secondary)",
+                        "textAlign": "center", "marginTop": "4px",
+                    }),
+                ], md=8),
+            ]),
+            title=f"{opp_name} — Build-up Style", icon="⚽"
+        )
+        sections.append(buildup_section)
+
+    except Exception:
+        analyses, season_summary, coords = [], {}, []
+        pt, zone, entry_coords = {}, {}, []
+        avg_sp = avg_dp = avg_carry = avg_el = avg_ec = avg_er = avg_box = avg_cross = 0
+        short_pct = long_pct = left_pct = center_pct = right_pct = 50
+
+    # ── 2. 15-SECOND OUTCOMES ─────────────────────────────────
+    try:
+        out15 = season_summary.get('outcomes_15s', {})
+        # Keys are flat: f3_entry_pct, shot_pct, sot_pct, goal_pct, turnover_pct
+        f3_pct   = float(out15.get('f3_entry_pct', 0))
+        shot_pct = float(out15.get('shot_pct',     0))
+        sot_pct  = float(out15.get('sot_pct',      0))
+        goal_pct = float(out15.get('goal_pct',     0))
+        turn_pct = float(out15.get('turnover_pct', 0))
+
+        sections.append(_section_card(
+            html.Div(style={"display": "flex", "gap": "10px", "flexWrap": "wrap"}, children=[
+                _stat_pill("F3 Entry",    f"{f3_pct}%",   _GOLD),
+                _stat_pill("Shot",        f"{shot_pct}%",  _BLUE),
+                _stat_pill("On Target",   f"{sot_pct}%",   _PURPLE),
+                _stat_pill("Goal",        f"{goal_pct}%",  _GREEN),
+                _stat_pill("Turnover",    f"{turn_pct}%",  _RED),
+            ]),
+            html.Div("What happens within 15 seconds of a build-up?", style={
+                "fontSize": "0.7rem", "color": "var(--text-secondary)",
+                "marginTop": "10px", "textAlign": "center",
+            }),
+            title="15-Second Outcomes", icon="⏱️"
+        ))
+    except Exception:
+        pass
+
+    # ── 3. FINAL THIRD ENTRY ──────────────────────────────────
+    try:
+        fig_f3 = _make_pitch_fig(x0=50, x1=100, show_f3=True, height=200)
+
+        if entry_coords:
+            # Color by entry method
+            method_colors = {'Short Pass': _GOLD, 'Deep Pass': _RED, 'Ball Carry': _BLUE}
+            for method, color in method_colors.items():
+                mxs = [c['x'] for c in entry_coords if isinstance(c, dict) and c.get('method') == method]
+                mys = [c['y'] for c in entry_coords if isinstance(c, dict) and c.get('method') == method]
+                if mxs:
+                    fig_f3.add_trace(go.Scatter(
+                        x=mxs, y=mys, mode='markers',
+                        marker=dict(color=color, size=6, opacity=0.7, symbol='diamond', line=dict(width=0)),
+                        name=method, showlegend=True, hoverinfo='skip',
+                    ))
+
+        f3_section = _section_card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={"marginBottom": "14px"}, children=[
+                        html.Div("ENTRY METHOD", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "marginBottom": "8px", "letterSpacing": "1px",
+                        }),
+                        _bar_row("Short Pass", avg_sp,    _GOLD),
+                        _bar_row("Deep Pass",  avg_dp,    _RED),
+                        _bar_row("Ball Carry", avg_carry, _BLUE),
+                    ]),
+                    html.Div(style={"marginBottom": "14px"}, children=[
+                        html.Div("ENTRY ZONE", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "marginBottom": "8px", "letterSpacing": "1px",
+                        }),
+                        _bar_row("Left",   avg_el, _BLUE),
+                        _bar_row("Central",avg_ec, _GOLD),
+                        _bar_row("Right",  avg_er, _PURPLE),
+                    ]),
+                    html.Div(children=[
+                        html.Div("AFTER ENTRY", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "marginBottom": "8px", "letterSpacing": "1px",
+                        }),
+                        _bar_row("Box Control", avg_box,   _GREEN),
+                        _bar_row("Cross",        avg_cross, _PURPLE),
+                    ]),
+                ], md=5),
+                dbc.Col([
+                    dcc.Graph(figure=fig_f3, config={'displayModeBar': False},
+                              style={"height": "200px"}),
+                    html.Div("◆ Final third entry points", style={
+                        "fontSize": "0.65rem", "color": "var(--text-secondary)",
+                        "textAlign": "center", "marginTop": "4px",
+                    }),
+                ], md=7),
+            ]),
+            title="Final Third Entry", icon="🎯"
+        )
+        sections.append(f3_section)
+    except Exception:
+        pass
+
+    # ── 4. PLAYMAKER, TEMPO & CLUSTERING ─────────────────────
+    try:
+        all_events, match_count = _load_all_team_events(opponent)
+
+        if not all_events.empty:
+            playmaker = identify_playmaker(all_events, opponent)
+            pm_name   = playmaker.get('name', '—')
+            pm_passes = playmaker.get('passes', 0)
+            pm_prog   = playmaker.get('prog_passes', 0)
+
+            # GK short pass distribution (proxy: passes from x < 20)
+            opp_events = all_events[all_events['team_name'] == opponent]
+            gk_passes  = opp_events[(opp_events['event'] == 'Pass') & (opp_events['x'] < 20)]
+            if len(gk_passes) > 0 and 'Pass End X' in gk_passes.columns:
+                gk_short_n = len(gk_passes[gk_passes['Pass End X'].fillna(0) < gk_passes['x'] + 25])
+            else:
+                gk_short_n = len(gk_passes)
+            gk_short_pct = round(gk_short_n / max(len(gk_passes), 1) * 100, 1)
+
+            # Full-back pass contribution
+            lb_passes = len(opp_events[(opp_events['event'] == 'Pass') & (opp_events['y'] < 25) & (opp_events['x'] > 30)])
+            rb_passes = len(opp_events[(opp_events['event'] == 'Pass') & (opp_events['y'] > 75) & (opp_events['x'] > 30)])
+
+            # Passes per game (tempo)
+            passes_per_game = round(len(opp_events[opp_events['event'] == 'Pass']) / max(match_count, 1), 1)
+
+            # Final third clustering (zone 14 vs flanks)
+            f3 = opp_events[opp_events['x'] > 66]
+            left_cluster   = round(len(f3[f3['y'] < 35])                              / max(len(f3), 1) * 100, 1)
+            center_cluster = round(len(f3[(f3['y'] >= 35) & (f3['y'] <= 65)])         / max(len(f3), 1) * 100, 1)
+            right_cluster  = round(len(f3[f3['y'] > 65])                              / max(len(f3), 1) * 100, 1)
+
+            # Shot origin (from advanced_tactics helper)
+            xg_origins = analyze_xg_chain_origins(all_events, opponent)
+            total_shots_ev = max(sum(xg_origins.values()), 1)
+
+            sections.append(_section_card(
+                dbc.Row([
+                    dbc.Col([
+                        html.Div(style={
+                            "background": "rgba(251,191,36,0.08)",
+                            "border": "1px solid rgba(251,191,36,0.2)",
+                            "borderRadius": "12px", "padding": "16px", "marginBottom": "14px",
+                        }, children=[
+                            html.Div("🎖️ KEY PLAYMAKER", style={
+                                "fontSize": "0.7rem", "color": "var(--text-secondary)",
+                                "textTransform": "uppercase", "letterSpacing": "1px", "marginBottom": "8px",
+                            }),
+                            html.Div(pm_name, style={
+                                "fontSize": "1.1rem", "fontWeight": "700", "color": _GOLD, "marginBottom": "6px",
+                            }),
+                            html.Div(style={"display": "flex", "gap": "16px"}, children=[
+                                html.Span(f"{pm_passes} passes", style={"fontSize": "0.75rem", "color": "var(--text-secondary)"}),
+                                html.Span(f"{pm_prog} progressive", style={"fontSize": "0.75rem", "color": _BLUE}),
+                            ]),
+                        ]),
+                        html.Div(style={
+                            "background": "rgba(255,255,255,0.03)", "borderRadius": "12px",
+                            "padding": "14px", "border": "1px solid var(--border-color)",
+                        }, children=[
+                            html.Div("⏩ GAME TEMPO & RHYTHM", style={
+                                "fontSize": "0.7rem", "color": "var(--text-secondary)",
+                                "textTransform": "uppercase", "letterSpacing": "1px", "marginBottom": "10px",
+                            }),
+                            html.Div(style={"display": "flex", "gap": "8px", "flexWrap": "wrap"}, children=[
+                                _stat_pill("Passes / Game",    passes_per_game, _GOLD),
+                                _stat_pill("GK Short Pass %", f"{gk_short_pct}%", _BLUE),
+                                _stat_pill("Left FB Passes",  lb_passes, _PURPLE),
+                                _stat_pill("Right FB Passes", rb_passes, _PURPLE),
+                            ]),
+                        ]),
+                    ], md=6),
+                    dbc.Col([
+                        html.Div(style={
+                            "background": "rgba(255,255,255,0.03)", "borderRadius": "12px",
+                            "padding": "14px", "border": "1px solid var(--border-color)", "marginBottom": "14px",
+                        }, children=[
+                            html.Div("📍 FINAL THIRD CLUSTERING", style={
+                                "fontSize": "0.7rem", "color": "var(--text-secondary)",
+                                "textTransform": "uppercase", "letterSpacing": "1px", "marginBottom": "10px",
+                            }),
+                            _bar_row("Left Channel",   left_cluster,   _BLUE),
+                            _bar_row("Zone 14 / Central", center_cluster, _GOLD),
+                            _bar_row("Right Channel",  right_cluster,  _PURPLE),
+                        ]),
+                        html.Div(style={
+                            "background": "rgba(255,255,255,0.03)", "borderRadius": "12px",
+                            "padding": "14px", "border": "1px solid var(--border-color)",
+                        }, children=[
+                            html.Div("🥅 SHOT ORIGIN (chain)", style={
+                                "fontSize": "0.7rem", "color": "var(--text-secondary)",
+                                "textTransform": "uppercase", "letterSpacing": "1px", "marginBottom": "10px",
+                            }),
+                            _bar_row("Open Play / Combination", round(xg_origins['Frontal/Open'] / total_shots_ev * 100, 1), _GOLD),
+                            _bar_row("From Cross",               round(xg_origins['Cross']        / total_shots_ev * 100, 1), _BLUE),
+                            _bar_row("Set Piece",                round(xg_origins['Set Piece']    / total_shots_ev * 100, 1), _RED),
+                        ]),
+                    ], md=6),
+                ]),
+                title="Playmaker, Tempo & Attacking Structure", icon="🧠"
+            ))
+        else:
+            raise ValueError("No events")
+
+    except Exception:
+        pass
+
+    # ── 5. SHOT MAP & xG PROFILE ──────────────────────────────
+    try:
+        xg_profile, xg_matches = analyze_opponent_xg_profile(opponent)
+
+        xg_per_game    = xg_profile.get('xg_per_game', 0)
+        sot_pct_xg     = xg_profile.get('sot_pct', 0)
+        xg_per_shot    = xg_profile.get('xg_per_shot', 0)
+        total_shots_xg = xg_profile.get('total_shots', 0)
+        # origin_pcts keys: 'open_play', 'from_cross', 'set_piece', 'fast_break', 'through_ball'
+        origin_pcts    = xg_profile.get('origin_pcts', {})
+        # zone_pcts keys: 'inside_box', 'outside_box'
+        zones_pct      = xg_profile.get('zone_pcts', {})
+
+        all_shot_coords = []
+        for m in (xg_matches or []):
+            all_shot_coords.extend(m.get('shot_coords', []))
+
+        fig_shots = _make_pitch_fig(x0=50, x1=100, height=230)
+
+        if all_shot_coords:
+            for ev_type, color, label in [
+                ('Goal',        _GOLD,                    "Goal"),
+                ('Saved Shot',  _BLUE,                    "On Target"),
+                ('Miss',        "rgba(255,255,255,0.3)",  "Off Target"),
+                ('Post',        _PURPLE,                  "Post"),
+            ]:
+                grp = [s for s in all_shot_coords if s.get('event') == ev_type]
+                if grp:
+                    gx  = [s['x'] for s in grp]
+                    gy  = [s['y'] for s in grp]
+                    gxg = [s.get('xG', 0) for s in grp]
+                    fig_shots.add_trace(go.Scatter(
+                        x=gx, y=gy, mode='markers',
+                        marker=dict(color=color,
+                                    size=[max(6, min(v * 60, 24)) for v in gxg],
+                                    opacity=0.75,
+                                    line=dict(color="rgba(255,255,255,0.15)", width=0.5)),
+                        name=label, showlegend=True,
+                        hovertemplate="xG: %{customdata:.2f}<extra></extra>",
+                        customdata=gxg,
+                    ))
+
+        shot_section = _section_card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "14px"}, children=[
+                        _stat_pill("xG / Game",   round(xg_per_game, 2),         _GOLD),
+                        _stat_pill("Shots",        total_shots_xg,                _BLUE),
+                        _stat_pill("On Target %", f"{round(sot_pct_xg, 1)}%",    _PURPLE),
+                        _stat_pill("xG / Shot",   round(xg_per_shot, 3),          _RED),
+                    ]),
+                    html.Div(children=[
+                        html.Div("SHOT ORIGIN", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "marginBottom": "8px", "letterSpacing": "1px",
+                        }),
+                        _bar_row("Open Play",   round(origin_pcts.get('open_play',    0), 1), _GOLD),
+                        _bar_row("From Cross",  round(origin_pcts.get('from_cross',   0), 1), _BLUE),
+                        _bar_row("Set Piece",   round(origin_pcts.get('set_piece',    0), 1), _RED),
+                        _bar_row("Fast Break",  round(origin_pcts.get('fast_break',   0), 1), _PURPLE),
+                        _bar_row("Through Ball",round(origin_pcts.get('through_ball', 0), 1), _GREEN),
+                    ]),
+                    html.Div(style={"marginTop": "14px"}, children=[
+                        html.Div("SHOT ZONE", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "marginBottom": "8px", "letterSpacing": "1px",
+                        }),
+                        _bar_row("Inside Box",  round(zones_pct.get('inside_box',  0), 1), _GREEN),
+                        _bar_row("Outside Box", round(zones_pct.get('outside_box', 0), 1), _RED),
+                    ]),
+                ], md=5),
+                dbc.Col([
+                    dcc.Graph(figure=fig_shots, config={'displayModeBar': False},
+                              style={"height": "230px"}),
+                    html.Div("Circle size = xG value", style={
+                        "fontSize": "0.65rem", "color": "var(--text-secondary)",
+                        "textAlign": "center", "marginTop": "4px",
+                    }),
+                ], md=7),
+            ]),
+            title="Shot Map & xG Profile", icon="🔫"
+        )
+        sections.append(shot_section)
+
+    except Exception:
+        pass
+
+    return html.Div(sections)
+
+
+# ──────────────────────────────────────────────────────────────
+# Defensive deep analysis builder
+# ──────────────────────────────────────────────────────────────
+
+def _build_defensive_analysis(opponent, opp_name):
+    """Returns rich analysis sections for the defensive tab."""
+    sections = []
+
+    try:
+        profile = get_opponent_defensive_profile(opponent)
+        if profile is None:
+            raise ValueError("No profile")
+
+        # ── 1. DEFENSIVE SHAPE & PRESSING ─────────────────────
+        coords = profile.get('heat_coords', [])
+        avg_line = round(profile.get('avg_def_line', 0), 1)
+        total_actions = profile.get('total_def_actions', 0)
+
+        fig_def = _make_pitch_fig(height=220)
+        if coords:
+            import random
+            sample = random.sample(coords, min(len(coords), 300))
+            by_type = {}
+            for c in sample:
+                t = c.get('type', 'Other')
+                by_type.setdefault(t, []).append(c)
+            type_colors = {'Tackle': _GOLD, 'Interception': _BLUE, 'Clearance': _RED, 'Challenge': _PURPLE}
+            for t, pts in by_type.items():
+                fig_def.add_trace(go.Scatter(
+                    x=[p['x'] for p in pts], y=[p['y'] for p in pts],
+                    mode='markers',
+                    marker=dict(color=type_colors.get(t, "rgba(255,255,255,0.3)"), size=5, opacity=0.55),
+                    name=t, showlegend=True, hoverinfo='skip',
+                ))
+            # Defensive line marker
+            fig_def.add_shape(type="line", x0=avg_line, y0=0, x1=avg_line, y1=100,
+                              line=dict(color=_GREEN, width=2, dash="dash"))
+            fig_def.add_annotation(x=avg_line, y=103, text=f"Avg Line: {avg_line}",
+                                   showarrow=False, font=dict(color=_GREEN, size=10))
+
+        sections.append(_section_card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "14px"}, children=[
+                        _stat_pill("Def. Actions", total_actions, _GOLD),
+                        _stat_pill("Avg Line Height", avg_line, _BLUE),
+                        _stat_pill("Box Aerials Won", f"{profile.get('box_aerial_win_pct', 0)}%", _PURPLE,
+                                   sub=f"{profile.get('box_aerial_total', 0)} total"),
+                    ]),
+                ], md=5),
+                dbc.Col([
+                    dcc.Graph(figure=fig_def, config={'displayModeBar': False}, style={"height": "220px"}),
+                    html.Div("● Defensive actions map  ── Avg line", style={
+                        "fontSize": "0.65rem", "color": "var(--text-secondary)", "textAlign": "center", "marginTop": "4px",
+                    }),
+                ], md=7),
+            ]),
+            title=f"{opp_name} — Defensive Shape & Pressing", icon="🛡️"
+        ))
+
+        # ── 2. VULNERABILITY MAP ──────────────────────────────
+        flanks = profile.get('f3_flanks', {})
+        z14_allowed = profile.get('z14_passes_allowed', 0)
+        z14_pct = profile.get('z14_success_allowed_pct', 0)
+        f3_total = profile.get('f3_entries_total', 0)
+
+        sections.append(_section_card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div("F3 ENTRIES CONCEDED BY FLANK", style={
+                        "fontSize": "0.72rem", "fontWeight": "700",
+                        "color": "var(--accent-gold)", "letterSpacing": "1px", "marginBottom": "8px",
+                    }),
+                    _bar_row("Left Channel", flanks.get('Left', 0), _BLUE),
+                    _bar_row("Central", flanks.get('Center', 0), _GOLD),
+                    _bar_row("Right Channel", flanks.get('Right', 0), _PURPLE),
+                    html.Div(f"Total F3 entries conceded: {f3_total}", style={
+                        "fontSize": "0.7rem", "color": "var(--text-secondary)", "marginTop": "8px",
+                    }),
+                ], md=6),
+                dbc.Col([
+                    html.Div(style={
+                        "background": "rgba(255,255,255,0.03)", "borderRadius": "12px",
+                        "padding": "14px", "border": "1px solid var(--border-color)",
+                    }, children=[
+                        html.Div("ZONE 14 CONTROL", style={
+                            "fontSize": "0.72rem", "fontWeight": "700",
+                            "color": "var(--accent-gold)", "letterSpacing": "1px", "marginBottom": "10px",
+                        }),
+                        html.Div(style={"display": "flex", "gap": "8px", "flexWrap": "wrap"}, children=[
+                            _stat_pill("Passes Allowed", z14_allowed, _RED),
+                            _stat_pill("Opp. Success %", f"{z14_pct}%", _RED),
+                        ]),
+                    ]),
+                ], md=6),
+            ]),
+            title="Vulnerability Map", icon="⚠️"
+        ))
+
+        # ── 3. PRE-GOAL STRUCTURE ─────────────────────────────
+        pg = profile.get('pre_goal_summary', {})
+        goals_conceded = profile.get('goals_conceded', 0)
+
+        sections.append(_section_card(
+            html.Div(style={"display": "flex", "gap": "10px", "flexWrap": "wrap"}, children=[
+                _stat_pill("Goals Conceded", goals_conceded, _RED),
+                _stat_pill("Avg Def. Actions (30s)", pg.get('avg_def_actions_30s', 0), _GOLD),
+                _stat_pill("Avg Opp. Passes (30s)", pg.get('avg_opp_passes_30s', 0), _BLUE),
+                _stat_pill("Failed Clearances", pg.get('total_failed_clearances', 0), _RED),
+            ]),
+            html.Div("What happens in the 30 seconds before conceding?", style={
+                "fontSize": "0.7rem", "color": "var(--text-secondary)", "marginTop": "10px", "textAlign": "center",
+            }),
+            title="Pre-Goal Structure (30s Window)", icon="🥅"
+        ))
+
+    except Exception:
+        pass
+
+    return html.Div(sections) if sections else html.Div(className="goz-form-section", children=[
+        html.Div("Defensive deep analysis data unavailable.", className="goz-card-desc")
+    ])
+
+
+# ──────────────────────────────────────────────────────────────
+# Off. Transitions deep analysis builder
+# ──────────────────────────────────────────────────────────────
+
+def _build_off_transitions_analysis(opponent, opp_name):
+    """Returns rich analysis sections for the offensive transitions tab."""
+    sections = []
+
+    try:
+        att_profile, _ = get_opponent_transition_profile(opponent)
+        if not att_profile:
+            raise ValueError("No data")
+
+        total = att_profile.get('total', 0)
+        zones = att_profile.get('zones', {})
+        outcomes = att_profile.get('outcomes', {})
+        top_players = att_profile.get('top_players', [])
+        coords = att_profile.get('coords', [])
+
+        # ── 1. RECOVERY MAP ───────────────────────────────────
+        fig_rec = _make_pitch_fig(height=220)
+        if coords:
+            import random
+            sample = random.sample(coords, min(len(coords), 400))
+            fig_rec.add_trace(go.Scatter(
+                x=[c['x'] for c in sample], y=[c['y'] for c in sample],
+                mode='markers', marker=dict(color=_GOLD, size=5, opacity=0.5),
+                name="Ball Recovery", showlegend=True, hoverinfo='skip',
+            ))
+
+        sections.append(_section_card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "14px"}, children=[
+                        _stat_pill("Total Recoveries", total, _GOLD),
+                        _stat_pill("→ F3 Entry", outcomes.get('f3_entry', 0), _BLUE),
+                        _stat_pill("→ Shot", outcomes.get('shot', 0), _PURPLE),
+                        _stat_pill("→ Goal", outcomes.get('goal', 0), _GREEN),
+                    ]),
+                    html.Div("RECOVERY ZONE", style={
+                        "fontSize": "0.72rem", "fontWeight": "700",
+                        "color": "var(--accent-gold)", "letterSpacing": "1px", "marginBottom": "8px",
+                    }),
+                    _bar_row("Defensive 3rd", round(zones.get('Defensive 3rd', 0) / max(total, 1) * 100, 1), _RED),
+                    _bar_row("Middle 3rd", round(zones.get('Middle 3rd', 0) / max(total, 1) * 100, 1), _GOLD),
+                    _bar_row("Final 3rd", round(zones.get('Final 3rd', 0) / max(total, 1) * 100, 1), _GREEN),
+                ], md=5),
+                dbc.Col([
+                    dcc.Graph(figure=fig_rec, config={'displayModeBar': False}, style={"height": "220px"}),
+                    html.Div("● Ball recovery positions", style={
+                        "fontSize": "0.65rem", "color": "var(--text-secondary)", "textAlign": "center", "marginTop": "4px",
+                    }),
+                ], md=7),
+            ]),
+            title=f"{opp_name} — Attacking Transitions (Recoveries)", icon="⚡"
+        ))
+
+        # ── 2. TOP RECOVERY PLAYERS ───────────────────────────
+        if top_players:
+            player_rows = []
+            for i, (name, count) in enumerate(top_players[:8]):
+                pct = round(count / max(total, 1) * 100, 1)
+                player_rows.append(html.Div(style={"display": "flex", "justifyContent": "space-between",
+                    "padding": "6px 0", "borderBottom": "1px solid rgba(255,255,255,0.05)"}, children=[
+                    html.Span(f"{i+1}. {name}", style={"fontSize": "0.78rem", "color": "var(--text-secondary)"}),
+                    html.Span(f"{count} ({pct}%)", style={"fontSize": "0.78rem", "fontWeight": "700", "color": _GOLD}),
+                ]))
+            sections.append(_section_card(
+                html.Div(player_rows),
+                title="Top Recovery Players", icon="🎖️"
+            ))
+
+    except Exception:
+        pass
+
+    return html.Div(sections) if sections else html.Div(className="goz-form-section", children=[
+        html.Div("Offensive transitions deep analysis data unavailable.", className="goz-card-desc")
+    ])
+
+
+# ──────────────────────────────────────────────────────────────
+# Def. Transitions deep analysis builder
+# ──────────────────────────────────────────────────────────────
+
+def _build_def_transitions_analysis(opponent, opp_name):
+    """Returns rich analysis sections for the defensive transitions tab."""
+    sections = []
+
+    try:
+        _, def_profile = get_opponent_transition_profile(opponent)
+        if not def_profile:
+            raise ValueError("No data")
+
+        total = def_profile.get('total', 0)
+        zones = def_profile.get('zones', {})
+        outcomes = def_profile.get('outcomes', {})
+        top_players = def_profile.get('top_players', [])
+        coords = def_profile.get('coords', [])
+
+        # ── 1. BALL LOSS MAP ──────────────────────────────────
+        fig_loss = _make_pitch_fig(height=220)
+        if coords:
+            import random
+            sample = random.sample(coords, min(len(coords), 400))
+            fig_loss.add_trace(go.Scatter(
+                x=[c['x'] for c in sample], y=[c['y'] for c in sample],
+                mode='markers', marker=dict(color=_RED, size=5, opacity=0.5),
+                name="Ball Loss", showlegend=True, hoverinfo='skip',
+            ))
+
+        sections.append(_section_card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "14px"}, children=[
+                        _stat_pill("Total Ball Losses", total, _RED),
+                        _stat_pill("Opp. → F3", outcomes.get('opp_f3_entry', 0), _BLUE),
+                        _stat_pill("Opp. → Shot", outcomes.get('opp_shot', 0), _PURPLE),
+                        _stat_pill("Opp. → Goal", outcomes.get('opp_goal', 0), _RED),
+                    ]),
+                    html.Div("LOSS ZONE", style={
+                        "fontSize": "0.72rem", "fontWeight": "700",
+                        "color": "var(--accent-gold)", "letterSpacing": "1px", "marginBottom": "8px",
+                    }),
+                    _bar_row("Defensive 3rd", round(zones.get('Defensive 3rd', 0) / max(total, 1) * 100, 1), _RED),
+                    _bar_row("Middle 3rd", round(zones.get('Middle 3rd', 0) / max(total, 1) * 100, 1), _GOLD),
+                    _bar_row("Final 3rd", round(zones.get('Final 3rd', 0) / max(total, 1) * 100, 1), _GREEN),
+                ], md=5),
+                dbc.Col([
+                    dcc.Graph(figure=fig_loss, config={'displayModeBar': False}, style={"height": "220px"}),
+                    html.Div("● Ball loss positions", style={
+                        "fontSize": "0.65rem", "color": "var(--text-secondary)", "textAlign": "center", "marginTop": "4px",
+                    }),
+                ], md=7),
+            ]),
+            title=f"{opp_name} — Defensive Transitions (Ball Losses)", icon="🔄"
+        ))
+
+        # ── 2. TOP BALL-LOSING PLAYERS ────────────────────────
+        if top_players:
+            player_rows = []
+            for i, (name, count) in enumerate(top_players[:8]):
+                pct = round(count / max(total, 1) * 100, 1)
+                player_rows.append(html.Div(style={"display": "flex", "justifyContent": "space-between",
+                    "padding": "6px 0", "borderBottom": "1px solid rgba(255,255,255,0.05)"}, children=[
+                    html.Span(f"{i+1}. {name}", style={"fontSize": "0.78rem", "color": "var(--text-secondary)"}),
+                    html.Span(f"{count} ({pct}%)", style={"fontSize": "0.78rem", "fontWeight": "700", "color": _RED}),
+                ]))
+            sections.append(_section_card(
+                html.Div(player_rows),
+                title="Top Ball-Losing Players", icon="⚠️"
+            ))
+
+    except Exception:
+        pass
+
+    return html.Div(sections) if sections else html.Div(className="goz-form-section", children=[
+        html.Div("Defensive transitions deep analysis data unavailable.", className="goz-card-desc")
+    ])
+
+
+# ──────────────────────────────────────────────────────────────
+# Layout
+# ──────────────────────────────────────────────────────────────
 
 def layout():
-    # Get list of rivals
-    matches = extract_fixture_data(lite=True)
+    matches   = extract_fixture_data(lite=True)
     standings = calculate_standings(matches)
-    rivals = sorted([t for t in standings['Team'].unique() if t != GOZTEPE])
+    rivals    = sorted([t for t in standings['Team'].unique() if t != GOZTEPE])
 
-    tab_defs = [
-        ("offensive-tab",  "⚔️",  "Offensive"),
-        ("defensive-tab",  "🛡️",  "Defensive"),
-        ("off-trans-tab",  "⚡",  "Off. Transition"),
-        ("def-trans-tab",  "🔒",  "Def. Transition"),
-    ]
-
-    return html.Div(
-        className="page-wrap",
-        children=[
-            html.Div(
-                className="page-content",
-                children=[
-
-                    # ── Hero / Matchup Header ──
-                    html.Div(style={
-                        "background": "linear-gradient(180deg, rgba(251,191,36,0.07) 0%, rgba(49,51,50,0) 100%)",
-                        "borderBottom": "1px solid rgba(255,255,255,0.07)",
-                        "padding": "28px 20px 32px",
-                        "textAlign": "center",
-                        "position": "relative",
-                    }, children=[
-                        # Back link
-                        dcc.Link("← Göztepe Hub", href="/", style={
-                            "position": "absolute", "top": "24px", "left": "28px",
-                            "color": "#fbbf24", "fontSize": "0.82rem", "fontWeight": "600",
-                            "textDecoration": "none", "letterSpacing": "0.3px",
-                        }),
-
-                        # Matchup row: logo — VS — opponent badge
-                        html.Div([
-                            # Göztepe logo
-                            html.Div([
-                                html.Img(src="/assets/goztepelogo.png", style={
-                                    "height": "72px", "filter": "drop-shadow(0 4px 16px rgba(251,191,36,0.45))",
-                                }),
-                                html.Div("GÖZTEPE", style={
-                                    "fontSize": "0.7rem", "fontWeight": "700", "letterSpacing": "2px",
-                                    "color": "#fbbf24", "marginTop": "8px", "textTransform": "uppercase",
-                                }),
-                            ], style={"textAlign": "center", "flex": "1", "maxWidth": "160px"}),
-
-                            # VS divider
-                            html.Div([
-                                html.Div("PRE-MATCH", style={
-                                    "fontSize": "0.62rem", "fontWeight": "700", "letterSpacing": "3px",
-                                    "color": "rgba(255,255,255,0.3)", "marginBottom": "4px",
-                                }),
-                                html.Div("VS", style={
-                                    "fontFamily": "'Oswald', sans-serif", "fontSize": "2.8rem",
-                                    "fontWeight": "700", "color": "rgba(255,255,255,0.15)",
-                                    "lineHeight": "1",
-                                }),
-                                html.Div("ANALYSIS", style={
-                                    "fontSize": "0.62rem", "fontWeight": "700", "letterSpacing": "3px",
-                                    "color": "rgba(255,255,255,0.3)", "marginTop": "4px",
-                                }),
-                            ], style={"textAlign": "center", "flex": "0 0 auto", "padding": "0 36px"}),
-
-                            # Opponent placeholder (reactive)
-                            html.Div(id="pre-match-opp-badge", style={
-                                "textAlign": "center", "flex": "1", "maxWidth": "160px",
-                            }),
-                        ], style={
-                            "display": "flex", "alignItems": "center", "justifyContent": "center",
-                            "marginBottom": "28px",
-                        }),
-
-                        # Subtitle
-                        html.P("4 game phases · Season-level tactical intelligence", style={
-                            "color": "rgba(255,255,255,0.35)", "fontSize": "0.82rem",
-                            "margin": "0 0 24px", "letterSpacing": "0.5px",
-                        }),
-
-                        # Opponent selector
-                        html.Div([
-                            html.Div("SELECT UPCOMING OPPONENT", style={
-                                "fontSize": "0.65rem", "fontWeight": "700", "letterSpacing": "2px",
-                                "color": "rgba(255,255,255,0.4)", "marginBottom": "10px",
-                            }),
-                            dcc.Dropdown(
-                                id='pre-match-rival-selector',
-                                options=[{'label': r, 'value': r} for r in rivals],
-                                value=rivals[0] if rivals else None,
-                                className="goz-dropdown",
-                                style={"width": "340px", "margin": "0 auto", "color": "#000"},
-                                clearable=False,
-                            ),
-                        ]),
-                    ]),
-
-                    # ── Phase Tabs (custom pill-style) ──
-                    html.Div(style={
-                        "maxWidth": "1600px", "margin": "0 auto", "padding": "24px 24px 0",
-                    }, children=[
-                        html.Div([
-                            dbc.RadioItems(
-                                id="pre-match-tabs",
-                                options=[
-                                    {"label": html.Span([icon, " ", lbl], style={"fontSize": "0.88rem"}),
-                                     "value": tid}
-                                    for tid, icon, lbl in tab_defs
-                                ],
-                                value="offensive-tab",
-                                inline=True,
-                                inputClassName="pm-tab-radio-input",
-                                labelClassName="pm-tab-radio-label",
-                                className="pm-tab-radio-group",
-                            ),
-                        ], style={
-                            "background": "rgba(255,255,255,0.04)",
-                            "borderRadius": "14px",
-                            "padding": "6px",
-                            "display": "inline-flex",
-                            "border": "1px solid rgba(255,255,255,0.08)",
-                        }),
-                    ]),
-
-                    # ── Main two-column content ──
-                    html.Div(style={
-                        "maxWidth": "1600px", "margin": "0 auto", "padding": "20px 24px 60px",
-                    }, children=[
-                        dbc.Row([
-                            # ─── Left: KPI panel ───
-                            dbc.Col([
-                                html.Div(id='pre-match-kpi-container'),
-                            ], md=4, style={"paddingRight": "12px"}),
-
-                            # ─── Right: Tab content ───
-                            dbc.Col([
-                                html.Div(id='pre-match-tab-content'),
-                            ], md=8, style={"paddingLeft": "12px"}),
-                        ]),
-                    ]),
-                ],
-            ),
-
-            # ── Footer ──
-            html.Footer(className="footer", children=[
-                html.Div(className="footer-inner", children=[
-                    html.Div("© TactIQ — Precision analytics for Süper Lig.", className="footer-text"),
-                    html.Img(src="/assets/superlig_logo.jpg", className="superlogo", alt="Süper Lig"),
+    return html.Div(className="page-wrap", children=[
+        html.Div(className="goz-hero", children=[
+            html.Div(className="goz-hero-content", children=[
+                dcc.Link("← GÖZTEPE HUB", href="/", className="goz-back-link"),
+                html.H1("PRE-MATCH ANALYSIS", className="goz-hub-title"),
+                html.P("Season-level tactical intelligence & phase analysis", className="goz-hub-subtitle"),
+                html.Div(style={"marginTop": "25px", "width": "100%", "maxWidth": "350px"}, children=[
+                    html.Label("SELECT UPCOMING OPPONENT", className="goz-label"),
+                    dcc.Dropdown(
+                        id='pre-match-rival-selector',
+                        options=[{'label': r, 'value': r} for r in rivals],
+                        value=rivals[0] if rivals else None,
+                        className="goz-dropdown",
+                        clearable=False,
+                    ),
                 ]),
             ]),
-        ],
-    )
+        ]),
+
+        html.Div(className="content-container", style={"padding": "0 20px 60px"}, children=[
+            html.Div(style={"display": "flex", "justifyContent": "center", "margin": "30px 0"}, children=[
+                dbc.RadioItems(
+                    id="pre-match-tabs",
+                    options=[
+                        {"label": "⚔️ Offensive",        "value": "offensive-tab"},
+                        {"label": "🛡️ Defensive",        "value": "defensive-tab"},
+                        {"label": "⚡ Off. Transitions",  "value": "off-trans-tab"},
+                        {"label": "🔄 Def. Transitions",  "value": "def-trans-tab"},
+                    ],
+                    value="offensive-tab",
+                    inline=True,
+                    className="pm-tab-radio-group",
+                    inputClassName="pm-tab-radio-input",
+                    labelClassName="pm-tab-radio-label",
+                ),
+            ]),
+            html.Div(id='pre-match-kpi-container'),
+            html.Div(id='pre-match-tab-content', style={"marginTop": "20px"}),
+        ]),
+
+        html.Footer(className="footer", children=[
+            html.Div(className="footer-inner", children=[
+                html.Div("© TactIQ Göztepe Hub — Precision Analytics", className="footer-text"),
+                html.Img(src="/assets/superlig_logo.jpg", className="superlogo"),
+            ])
+        ])
+    ])
+
+
+# ──────────────────────────────────────────────────────────────
+# Callback
+# ──────────────────────────────────────────────────────────────
 
 @callback(
     [Output('pre-match-kpi-container', 'children'),
-     Output('pre-match-tab-content', 'children'),
-     Output('pre-match-opp-badge', 'children')],
+     Output('pre-match-tab-content', 'children')],
     [Input('pre-match-rival-selector', 'value'),
      Input('pre-match-tabs', 'value')]
 )
 def update_pre_match(opponent, active_tab):
     if not opponent:
-        return html.Div(), html.Div(), html.Div()
+        return html.Div(), html.Div()
 
-    # ── Opponent badge for the hero header ──
-    opp_short = opponent.replace(' Spor Kulübü','').replace(' SK','').replace(' FK','').strip()
-    opp_badge = html.Div([
-        html.Div("🏟️", style={"fontSize": "2.8rem", "lineHeight": "1",
-                              "filter": "grayscale(0.3)"}),
-        html.Div(opp_short.upper(), style={
-            "fontSize": "0.7rem", "fontWeight": "700", "letterSpacing": "2px",
-            "color": "rgba(255,255,255,0.55)", "marginTop": "8px", "textTransform": "uppercase",
-        }),
+    phase    = TAB_TO_PHASE.get(active_tab, 'Offensive')
+    g_metrics = get_phase_metrics(phase, GOZTEPE)
+    o_metrics = get_phase_metrics(phase, opponent)
+    goz_name  = _clean(GOZTEPE)
+    opp_name  = _clean(opponent)
+
+    cards = [
+        _metric_card(lbl, g_metrics[lbl], o_metrics.get(lbl, "N/A"),
+                     goz_name, opp_name, lbl in LOWER_IS_BETTER)
+        for lbl in g_metrics
+    ]
+
+    kpi_container = html.Div(className="goz-form-section", children=[
+        html.Div(className="goz-section-header", children=[
+            html.Span(f"{TAB_LABELS[active_tab]} Key Metrics", className="goz-card-title"),
+        ]),
+        html.Div(style={
+            "display": "grid",
+            "gridTemplateColumns": "repeat(auto-fill, minmax(220px, 1fr))",
+            "gap": "12px",
+        }, children=cards),
     ])
 
-    # ── KPI CONTAINER ──
-    current_phase_label = ("Offensive" if active_tab == "offensive-tab"
-                           else "Defensive" if active_tab == "defensive-tab"
-                           else "Off. Transitions" if active_tab == "off-trans-tab"
-                           else "Def. Transitions")
-    g_metrics_kpi = get_phase_metrics(current_phase_label, GOZTEPE)
-    o_metrics_kpi = get_phase_metrics(current_phase_label, opponent)
-
-    kpis = []
-    for label, g_val in g_metrics_kpi.items():
-        o_val = o_metrics_kpi.get(label, "N/A")
-        kpis.append(_comparison_card(label, g_val, o_val, lower_is_better=(label in LOWER_IS_BETTER)))
-
-    opp_display = opp_short if len(opp_short) <= 12 else opp_short[:12] + "…"
-
-    kpi_content = html.Div(style={
-        "background": "rgba(20,24,30,0.55)",
-        "border": "1px solid rgba(255,255,255,0.08)",
-        "borderRadius": "16px",
-        "padding": "18px 16px",
-    }, children=[
-        # Panel header
-        html.Div([
-            html.Div([
-                html.Div("KEY METRICS", style={
-                    "fontSize": "0.62rem", "fontWeight": "700", "letterSpacing": "2px",
-                    "color": "rgba(255,255,255,0.35)",
-                }),
-                html.Div(current_phase_label, style={
-                    "fontFamily": "'Oswald', sans-serif", "fontSize": "1.1rem",
-                    "fontWeight": "600", "color": "#fff", "lineHeight": "1.2",
-                }),
-            ]),
-        ], style={"marginBottom": "14px", "paddingBottom": "12px",
-                  "borderBottom": "1px solid rgba(255,255,255,0.07)"}),
-        # Team labels row
-        html.Div([
-            html.Span("GZT", style={
-                "fontSize": "0.65rem", "fontWeight": "700", "color": "#fbbf24",
-                "letterSpacing": "1px",
-            }),
-            html.Span("vs", style={
-                "fontSize": "0.6rem", "color": "rgba(255,255,255,0.25)",
-                "margin": "0 auto",
-            }),
-            html.Span(opp_display.upper(), style={
-                "fontSize": "0.65rem", "fontWeight": "700", "color": "rgba(255,100,100,0.8)",
-                "letterSpacing": "1px",
-            }),
-        ], style={
-            "display": "flex", "justifyContent": "space-between",
-            "marginBottom": "8px", "padding": "0 14px",
-        }),
-        # Metric cards
-        html.Div(kpis),
-    ])
-
-    # 3. TAB CONTENT
-    tab_content = []
-    
+    # Tab-specific deep content
     if active_tab == "offensive-tab":
-        # ── Last-match data for SEPP + trace ──
-        rival_matches = buildup_analysis.get_opponent_matches_list(opponent)
-        opp_buildup = goz_buildup = opp_sepp = goz_sepp = None
-        fig_trace = go.Figure()
-        if rival_matches:
-            match_file = rival_matches[-1]['filename']
-            df_last = get_match_dataframe(match_file)
-            if df_last is not None:
-                opp_buildup = buildup_analysis.analyze_buildup_for_match(df_last, opponent)
-                goz_buildup = buildup_analysis.analyze_buildup_for_match(df_last, GOZTEPE)
-                opp_sepp = metrics.calculate_sepp(df_last, opponent)
-                goz_sepp = metrics.calculate_sepp(df_last, GOZTEPE)
-
-                fig_trace.add_shape(type="rect", x0=0, y0=0, x1=100, y1=100,
-                                    line_color="#444", fillcolor="rgba(0,0,0,0)")
-                if opp_buildup and 'sequences' in opp_buildup:
-                    for seq in opp_buildup['sequences'][:4]:
-                        xs = [e['x'] for e in seq['events']]
-                        ys = [e['y'] for e in seq['events']]
-                        fig_trace.add_trace(go.Scatter(
-                            x=xs, y=ys, mode='lines+markers',
-                            line_width=2, marker_size=5, opacity=0.7))
-                fig_trace.update_layout(
-                    title=dict(text=f"{opponent} — Build-up Sequences (Last Match)", font=dict(size=12)),
-                    template="plotly_dark", height=300, showlegend=False,
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                    margin=dict(t=40, b=10, l=10, r=10),
-                    xaxis=dict(range=[-5, 105], showgrid=False, zeroline=False),
-                    yaxis=dict(range=[-5, 105], showgrid=False, zeroline=False),
-                )
-
-        # ── Season-level data ──
-        match_analyses_list, season_summary = buildup_analysis.get_opponent_buildup_analysis(opponent)
-        xg_profile, _ = xg_chain_analysis.analyze_opponent_xg_profile(opponent)
-
-        # F3 entry aggregated from last 5 matches
-        agg_f3 = _aggregate_f3_stats((match_analyses_list or [])[-5:])
-
-        # ── Chart: Build-up Direction (season) ──
-        fig_direction = go.Figure()
-        if season_summary:
-            z = season_summary['zone']
-            fig_direction.add_trace(go.Bar(
-                x=[z['left_pct'], z['center_pct'], z['right_pct']],
-                y=['Left', 'Center', 'Right'],
-                orientation='h',
-                marker_color=['#fbbf24', '#60a5fa', '#34d399'],
-                text=[f"{z['left_pct']}%", f"{z['center_pct']}%", f"{z['right_pct']}%"],
-                textposition='inside', textfont_color='#111',
-            ))
-        fig_direction.update_layout(
-            title=dict(text=f"{opponent} — Build-up Direction (Season)", font=dict(size=12)),
-            template="plotly_dark", height=200,
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(t=40, b=10, l=60, r=10),
-            xaxis=dict(showgrid=False, range=[0, 100], title="% of build-ups"),
-            yaxis=dict(showgrid=False),
-            showlegend=False,
-        )
-
-        # ── Chart: F3 Entry Method ──
-        fig_f3_method = go.Figure()
-        if agg_f3:
-            em = agg_f3['entry_method']
-            fig_f3_method.add_trace(go.Bar(
-                x=[em['short_pass_pct'], em['deep_pass_pct'], em['carry_pct']],
-                y=['Short Pass', 'Deep Pass', 'Ball Carry'],
-                orientation='h',
-                marker_color=['#60a5fa', '#f97316', '#a78bfa'],
-                text=[f"{em['short_pass_pct']}%", f"{em['deep_pass_pct']}%", f"{em['carry_pct']}%"],
-                textposition='inside', textfont_color='#111',
-            ))
-        fig_f3_method.update_layout(
-            title="How They Enter the Final Third",
-            template="plotly_dark", height=200,
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(t=40, b=10, l=80, r=10),
-            xaxis=dict(showgrid=False, range=[0, 100], title="% of entries"),
-            yaxis=dict(showgrid=False),
-            showlegend=False,
-        )
-
-        # ── Chart: Shot Origin ──
-        fig_origins = go.Figure()
-        if xg_profile:
-            op = xg_profile['origin_pcts']
-            labels = ['Open Play', 'From Cross', 'Set Piece', 'Fast Break', 'Through Ball']
-            keys   = ['open_play', 'from_cross', 'set_piece', 'fast_break', 'through_ball']
-            vals   = [op.get(k, 0) for k in keys]
-            colors = ['#60a5fa', '#fbbf24', '#f472b6', '#34d399', '#a78bfa']
-            fig_origins.add_trace(go.Bar(
-                x=vals, y=labels, orientation='h',
-                marker_color=colors,
-                text=[f"{v}%" for v in vals],
-                textposition='inside', textfont_color='#111',
-            ))
-        fig_origins.update_layout(
-            title="Attack Creation — Shot Origins (Season)",
-            template="plotly_dark", height=250,
-            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(t=40, b=10, l=100, r=10),
-            xaxis=dict(showgrid=False, range=[0, 100], title="% of shots"),
-            yaxis=dict(showgrid=False),
-            showlegend=False,
-        )
-
-        # ── Assemble tab content ──
-        tab_content = [
-            # Section 1: SEPP Comparison
-            html.Div(className="goz-form-section", children=[
-                html.Div(className="goz-section-header", children=[
-                    html.Span("Shot Creation (SEPP)", style={"fontFamily": "'Oswald', sans-serif", "fontSize": "1rem", "fontWeight": "600"}),
-                ]),
-                dbc.Row([
-                    dbc.Col([
-                        _comparison_card("Shot Creation Rate",
-                            f"{goz_sepp['efficiency']}%" if goz_sepp else "—",
-                            f"{opp_sepp['efficiency']}%" if opp_sepp else "—"),
-                        _comparison_card("Passes per Shot",
-                            goz_sepp['sepp_per_shot'] if goz_sepp else "—",
-                            opp_sepp['sepp_per_shot'] if opp_sepp else "—",
-                            lower_is_better=True),
-                        _comparison_card("Final Third Sequences",
-                            goz_sepp['sepp_f3'] if goz_sepp else "—",
-                            opp_sepp['sepp_f3'] if opp_sepp else "—"),
-                    ], md=5),
-                    dbc.Col(dcc.Graph(figure=fig_trace, config={'displayModeBar': False}), md=7),
-                ]),
-            ], style={"marginBottom": "16px"}),
-
-            # Section 2: Build-up Pattern (Season)
-            html.Div(className="goz-form-section", children=[
-                html.Div(className="goz-section-header", children=[
-                    html.Span("Build-up Pattern — Season", style={"fontFamily": "'Oswald', sans-serif", "fontSize": "1rem", "fontWeight": "600"}),
-                ]),
-                dbc.Row([
-                    dbc.Col([
-                        html.Div([
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(
-                                    f"{season_summary['avg_buildups_per_match']}" if season_summary else "—",
-                                    className="goz-stat-number"),
-                                html.Div("Avg Build-ups / Game", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(
-                                    f"{season_summary['pass_type']['short_pct']}%" if season_summary else "—",
-                                    className="goz-stat-number"),
-                                html.Div("Short Pass %", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(
-                                    f"{season_summary['pass_type']['long_pct']}%" if season_summary else "—",
-                                    className="goz-stat-number"),
-                                html.Div("Long Ball %", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(
-                                    f"{season_summary['outcomes_15s']['f3_entry_pct']}%" if season_summary else "—",
-                                    className="goz-stat-number"),
-                                html.Div("Reach Final Third (15s)", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(
-                                    f"{season_summary['outcomes_15s']['shot_pct']}%" if season_summary else "—",
-                                    className="goz-stat-number"),
-                                html.Div("Create Shot (15s)", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(
-                                    f"{season_summary['outcomes_15s']['turnover_pct']}%" if season_summary else "—",
-                                    className="goz-stat-number",
-                                    style={"color": "#ef4444"}),
-                                html.Div("Turnover %", className="goz-stat-label"),
-                            ]),
-                        ]),
-                    ], md=4),
-                    dbc.Col([
-                        dcc.Graph(figure=fig_direction, config={'displayModeBar': False}),
-                    ], md=8),
-                ]),
-            ], style={"marginBottom": "16px"}),
-
-            # Section 3: Final Third Entry Analysis
-            html.Div(className="goz-form-section", children=[
-                html.Div(className="goz-section-header", children=[
-                    html.Span("Final Third Entry — How & Where (Last 5 Matches)", style={"fontFamily": "'Oswald', sans-serif", "fontSize": "1rem", "fontWeight": "600"}),
-                ]),
-                dbc.Row([
-                    dbc.Col([
-                        dcc.Graph(figure=fig_f3_method, config={'displayModeBar': False}),
-                    ], md=6),
-                    dbc.Col([
-                        html.Div([
-                            html.Div("Entry Zone", className="goz-label", style={"marginBottom": "10px"}),
-                            *([
-                                html.Div([
-                                    html.Span(lbl, style={"color": "var(--text-secondary)", "fontSize": "0.8rem", "width": "55px", "display": "inline-block"}),
-                                    html.Div(style={
-                                        "display": "inline-block", "height": "14px",
-                                        "width": f"{agg_f3['entry_zone'][key]}%",
-                                        "background": color, "borderRadius": "3px",
-                                        "verticalAlign": "middle", "marginRight": "6px",
-                                    }),
-                                    html.Span(f"{agg_f3['entry_zone'][key]}%", style={"fontSize": "0.85rem"}),
-                                ], style={"marginBottom": "10px"})
-                                for lbl, key, color in [
-                                    ("Left",   "left_pct",   "#fbbf24"),
-                                    ("Center", "center_pct", "#60a5fa"),
-                                    ("Right",  "right_pct",  "#34d399"),
-                                ]
-                            ] if agg_f3 else [html.Div("No data", style={"color": "var(--text-secondary)"})]),
-                        ], style={"padding": "14px"}),
-                        html.Div([
-                            html.Div("After Entry (10s)", className="goz-label", style={"marginBottom": "10px"}),
-                            *([
-                                html.Div([
-                                    html.Span(lbl, style={"color": "var(--text-secondary)", "fontSize": "0.8rem", "width": "90px", "display": "inline-block"}),
-                                    html.Span(f"{agg_f3['subsequent'][key]}%", style={"fontSize": "0.9rem", "fontWeight": "bold", "color": color}),
-                                ], style={"marginBottom": "8px"})
-                                for lbl, key, color in [
-                                    ("Box Control",  "box_control_pct", "#fbbf24"),
-                                    ("Cross",        "cross_pct",       "#60a5fa"),
-                                    ("Aerial Won",   "aerial_won_pct",  "#34d399"),
-                                ]
-                            ] if agg_f3 else []),
-                        ], style={"padding": "14px"}),
-                    ], md=6),
-                ]),
-            ], style={"marginBottom": "16px"}),
-
-            # Section 4: Attack Creation Profile
-            html.Div(className="goz-form-section", children=[
-                html.Div(className="goz-section-header", children=[
-                    html.Span("Attack Creation Profile (Season)", style={"fontFamily": "'Oswald', sans-serif", "fontSize": "1rem", "fontWeight": "600"}),
-                ]),
-                dbc.Row([
-                    dbc.Col([
-                        dcc.Graph(figure=fig_origins, config={'displayModeBar': False}),
-                    ], md=7),
-                    dbc.Col([
-                        html.Div([
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(f"{xg_profile['shots_per_game']}" if xg_profile else "—", className="goz-stat-number"),
-                                html.Div("Shots / Game", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(f"{xg_profile['xg_per_shot']}" if xg_profile else "—", className="goz-stat-number"),
-                                html.Div("xG / Shot", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(f"{xg_profile['xg_per_game']}" if xg_profile else "—", className="goz-stat-number"),
-                                html.Div("xG / Game", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(f"{xg_profile['sot_pct']}%" if xg_profile else "—", className="goz-stat-number"),
-                                html.Div("Shots on Target %", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(f"{xg_profile['zone_pcts'].get('inside_box', 0)}%" if xg_profile else "—", className="goz-stat-number"),
-                                html.Div("Shots Inside Box", className="goz-stat-label"),
-                            ], style={"marginBottom": "8px"}),
-                            html.Div(className="goz-stat-item", children=[
-                                html.Div(f"{xg_profile['conversion_pct']}%" if xg_profile else "—", className="goz-stat-number"),
-                                html.Div("Conversion Rate", className="goz-stat-label"),
-                            ]),
-                        ]),
-                    ], md=5),
-                ]),
-            ]),
-        ]
-    
+        tab_content = _build_offensive_analysis(opponent, opp_name)
     elif active_tab == "defensive-tab":
-        def_profile = defensive_analysis.get_opponent_defensive_profile(opponent)
-        goz_def_profile = defensive_analysis.get_opponent_defensive_profile(GOZTEPE)
-        
-        if def_profile:
-            flanks = def_profile.get('f3_flanks', {})
-            fig_vulnerability = px.bar(
-                x=list(flanks.values()), y=list(flanks.keys()),
-                orientation='h', color=list(flanks.values()),
-                color_continuous_scale='Reds',
-                labels={'x': 'Vulnerability (%)', 'y': 'Flank'}
-            )
-            fig_vulnerability.update_layout(
-                title=f"{opponent} - Flank Vulnerability",
-                template="plotly_dark", height=250, margin=dict(t=50, b=20, l=20, r=20),
-                coloraxis_showscale=False
-            )
-            
-            tab_content = [
-                html.Div(className="goz-form-section", children=[
-                    html.Div(className="goz-section-header", children=[
-                        html.Span("Defensive Structure", style={"fontFamily": "'Oswald', sans-serif", "fontSize": "1rem", "fontWeight": "600"}),
-                    ]),
-                    dbc.Row([
-                        dbc.Col([
-                            _comparison_card("Box Aerial Win %", f"{goz_def_profile.get('box_aerial_win_pct')}%", f"{def_profile.get('box_aerial_win_pct')}%"),
-                            _comparison_card("Zone 14 Control", f"{100-goz_def_profile.get('z14_success_allowed_pct',0)}%", f"{100-def_profile.get('z14_success_allowed_pct',0)}%"),
-                            _comparison_card("Avg Line Height", round(goz_def_profile.get('avg_def_line',0),1), round(def_profile.get('avg_def_line',0),1)),
-                        ], md=6),
-                        dbc.Col(dcc.Graph(figure=fig_vulnerability, config={'displayModeBar': False}), md=6),
-                    ]),
-                ], style={"marginBottom": "16px"}),
-                html.Div(className="goz-form-section", children=[
-                    html.Div(className="goz-section-header", children=[
-                        html.Span("30s Before Conceding", style={"fontFamily": "'Oswald', sans-serif", "fontSize": "1rem", "fontWeight": "600"}),
-                    ]),
-                    html.P("Average opponent pressure in the 30 seconds before a goal was conceded",
-                           style={"fontSize": "0.8rem", "color": "var(--text-secondary)", "marginBottom": "16px"}),
-                    dbc.Row([
-                        dbc.Col(html.Div(className="goz-stat-item", children=[
-                            html.Div(def_profile['pre_goal_summary']['avg_opp_passes_30s'], className="goz-stat-number"),
-                            html.Div("Passes Allowed", className="goz-stat-label"),
-                        ]), md=4),
-                        dbc.Col(html.Div(className="goz-stat-item", children=[
-                            html.Div(def_profile['pre_goal_summary']['avg_def_actions_30s'], className="goz-stat-number"),
-                            html.Div("Defensive Actions", className="goz-stat-label"),
-                        ]), md=4),
-                        dbc.Col(html.Div(className="goz-stat-item", children=[
-                            html.Div(def_profile['pre_goal_summary']['total_failed_clearances'],
-                                     className="goz-stat-number", style={"color": "#ef4444"}),
-                            html.Div("Failed Clearances", className="goz-stat-label"),
-                        ]), md=4),
-                    ]),
-                ]),
-            ]
-            
+        tab_content = _build_defensive_analysis(opponent, opp_name)
+    elif active_tab == "off-trans-tab":
+        tab_content = _build_off_transitions_analysis(opponent, opp_name)
+    elif active_tab == "def-trans-tab":
+        tab_content = _build_def_transitions_analysis(opponent, opp_name)
     else:
         tab_content = html.Div(className="goz-form-section", children=[
-            html.Div(className="goz-section-header", children=[
-                html.Span("Transition Profiling", style={"fontFamily": "'Oswald', sans-serif", "fontSize": "1rem", "fontWeight": "600"}),
-            ]),
-            html.P("Coming soon: Detailed counter-attack and recovery maps.",
-                   style={"color": "var(--text-secondary)", "textAlign": "center", "padding": "30px 0"}),
+            html.Div(f"{TAB_LABELS[active_tab]} detaylı analiz yakında.", className="goz-card-desc")
         ])
 
-    return kpi_content, html.Div(tab_content), opp_badge
+    return kpi_container, tab_content
