@@ -1,8 +1,13 @@
 import dash
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from mplsoccer import Pitch
+import base64
+import io
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
-import plotly.graph_objects as go
 from utils.data import extract_fixture_data, calculate_standings
 from göztepehub.utils import buildup_analysis
 from göztepehub.utils.xg_chain_analysis import analyze_opponent_xg_profile
@@ -95,128 +100,51 @@ def _bar_row(label, pct, color="var(--accent-gold)"):
 # ──────────────────────────────────────────────────────────────
 
 _PITCH_BG = "#0e1b0f"
-_LINE_C   = "rgba(255,255,255,0.55)"
 _GOLD     = "#fbbf24"
 _RED      = "#ef4444"
 _BLUE     = "#3b82f6"
 _PURPLE   = "#a855f7"
-_GREEN    = "rgba(34,197,94,0.9)"
+_GREEN    = "#22c55e"
 
 
-def _make_pitch_fig(x0=0, x1=100, show_f3=False, height=200):
-    """Full-featured plotly football pitch."""
-    lc  = _LINE_C
-    lc2 = "rgba(255,255,255,0.25)"   # secondary lines
-
-    shapes = [
-        # Pitch fill + outer border
-        dict(type="rect", x0=x0, y0=0, x1=x1, y1=100,
-             line=dict(color=lc, width=1.5), fillcolor=_PITCH_BG, layer="below"),
-    ]
-
-    # ── Halfway line (full pitch only) ──────────────────
-    if x0 == 0 and x1 == 100:
-        shapes.append(dict(type="line", x0=50, y0=0, x1=50, y1=100,
-                           line=dict(color=lc, width=1)))
-
-    # ── F3 dashed marker ────────────────────────────────
-    if show_f3 and x0 <= 66.67 <= x1:
-        shapes.append(dict(type="line", x0=66.67, y0=0, x1=66.67, y1=100,
-                           line=dict(color="rgba(251,191,36,0.4)", width=1, dash="dot")))
-
-    # ── Left penalty area (own goal end) ────────────────
-    if x0 == 0:
-        shapes += [
-            dict(type="rect", x0=0, y0=20.35, x1=15.71, y1=79.65,
-                 line=dict(color=lc, width=1), fillcolor="rgba(0,0,0,0)"),
-            dict(type="rect", x0=0, y0=36.47, x1=5.24, y1=63.53,
-                 line=dict(color=lc2, width=1), fillcolor="rgba(0,0,0,0)"),
-            # Penalty spot
-            dict(type="circle", x0=10.4, y0=49.3, x1=11.6, y1=50.7,
-                 line=dict(color=lc, width=1), fillcolor=lc),
-        ]
-
-    # ── Right penalty area (attacking end) ──────────────
-    if x1 == 100:
-        shapes += [
-            dict(type="rect", x0=84.29, y0=20.35, x1=100, y1=79.65,
-                 line=dict(color=lc, width=1), fillcolor="rgba(0,0,0,0)"),
-            dict(type="rect", x0=94.76, y0=36.47, x1=100, y1=63.53,
-                 line=dict(color=lc2, width=1), fillcolor="rgba(0,0,0,0)"),
-            # Penalty spot
-            dict(type="circle", x0=88.4, y0=49.3, x1=89.6, y1=50.7,
-                 line=dict(color=lc, width=1), fillcolor=lc),
-        ]
-
-    fig = go.Figure()
-    fig.update_layout(
-        shapes=shapes,
-        plot_bgcolor=_PITCH_BG,
-        paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=2, r=2, t=2, b=2),
-        height=height,
-        xaxis=dict(range=[x0 - 1, x1 + 1], showgrid=False, zeroline=False,
-                   showticklabels=False, fixedrange=True),
-        yaxis=dict(range=[-1, 101], showgrid=False, zeroline=False,
-                   showticklabels=False, fixedrange=True),
-        showlegend=True,
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
-            font=dict(color="rgba(255,255,255,0.75)", size=10),
-            bgcolor="rgba(0,0,0,0)", borderwidth=0,
-        ),
-        hovermode='closest',
+def _make_mpl_pitch(half=False, show_f3=False, figsize=(10, 6.5)):
+    """mplsoccer football pitch — returns (pitch, fig, ax)."""
+    pitch = Pitch(
+        pitch_type='opta',
+        pitch_color=_PITCH_BG,
+        line_color=(1.0, 1.0, 1.0, 0.55),
+        linewidth=1.5,
+        half=half,
     )
+    fig, ax = pitch.draw(figsize=figsize)
+    fig.patch.set_facecolor(_PITCH_BG)
+    if show_f3:
+        ax.axvline(x=66.67, color=_GOLD, linestyle=':', linewidth=1, alpha=0.4)
+    return pitch, fig, ax
 
-    th = np.linspace(0, 2 * np.pi, 72)
 
-    # Center circle (full pitch only)
-    if x0 == 0 and x1 == 100:
-        rx, ry = 8.71, 13.46
-        fig.add_trace(go.Scatter(
-            x=50 + rx * np.cos(th), y=50 + ry * np.sin(th),
-            mode='lines', line=dict(color=lc, width=1),
-            showlegend=False, hoverinfo='skip',
-        ))
-        fig.add_trace(go.Scatter(
-            x=[50], y=[50], mode='markers',
-            marker=dict(color=lc, size=5),
-            showlegend=False, hoverinfo='skip',
-        ))
+def _fig_to_b64(fig):
+    """Convert matplotlib figure to a base64 data URI."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=120, bbox_inches='tight',
+                facecolor=_PITCH_BG, edgecolor='none')
+    buf.seek(0)
+    data = base64.b64encode(buf.read()).decode()
+    plt.close(fig)
+    return f"data:image/png;base64,{data}"
 
-    # Right penalty arc (D) — visible regardless of x0
-    if x1 == 100:
-        # Arc of the D: starts ~11m from penalty spot (spot at 89, D extends to ~78)
-        arc_angles = np.linspace(np.radians(127), np.radians(233), 40)
-        arc_cx, arc_cy = 89.0, 50.0
-        arc_rx, arc_ry = 10.0, 15.5
-        ax = arc_cx + arc_rx * np.cos(arc_angles)
-        ay = arc_cy + arc_ry * np.sin(arc_angles)
-        # Only draw the part outside the penalty box (x < 84.29)
-        mask = ax < 84.29
-        if mask.any():
-            fig.add_trace(go.Scatter(
-                x=ax[mask], y=ay[mask],
-                mode='lines', line=dict(color=lc2, width=1),
-                showlegend=False, hoverinfo='skip',
-            ))
 
-    # Left penalty arc (D)
-    if x0 == 0:
-        arc_angles = np.linspace(np.radians(-53), np.radians(53), 40)
-        arc_cx, arc_cy = 11.0, 50.0
-        arc_rx, arc_ry = 10.0, 15.5
-        ax = arc_cx + arc_rx * np.cos(arc_angles)
-        ay = arc_cy + arc_ry * np.sin(arc_angles)
-        mask = ax > 15.71
-        if mask.any():
-            fig.add_trace(go.Scatter(
-                x=ax[mask], y=ay[mask],
-                mode='lines', line=dict(color=lc2, width=1),
-                showlegend=False, hoverinfo='skip',
-            ))
-
-    return fig
+def _mpl_legend(ax):
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    legend = ax.legend(handles, labels, loc='upper left', fontsize=8)
+    frame = legend.get_frame()
+    frame.set_facecolor(_PITCH_BG)
+    frame.set_alpha(0.75)
+    frame.set_edgecolor('white')
+    for text in legend.get_texts():
+        text.set_color('white')
 
 
 # ──────────────────────────────────────────────────────────────
@@ -307,24 +235,18 @@ def _build_offensive_analysis(opponent, opp_name):
         right_pct  = float(zone.get('right_pct',  33))
 
         # Buildup start pitch — color by pass type
-        fig_bu = _make_pitch_fig(show_f3=True, height=210)
+        pitch_bu, fig_bu, ax_bu = _make_mpl_pitch(show_f3=True)
         if coords:
             short_xs = [c['x'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Short']
             short_ys = [c['y'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Short']
             long_xs  = [c['x'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Long']
             long_ys  = [c['y'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Long']
             if short_xs:
-                fig_bu.add_trace(go.Scatter(
-                    x=short_xs, y=short_ys, mode='markers',
-                    marker=dict(color=_GOLD, size=5, opacity=0.6, line=dict(width=0)),
-                    name="Short build-up", showlegend=True, hoverinfo='skip',
-                ))
+                pitch_bu.scatter(short_xs, short_ys, ax=ax_bu, color=_GOLD, s=20, alpha=0.6, label="Short build-up")
             if long_xs:
-                fig_bu.add_trace(go.Scatter(
-                    x=long_xs, y=long_ys, mode='markers',
-                    marker=dict(color=_RED, size=5, opacity=0.6, line=dict(width=0)),
-                    name="Long ball", showlegend=True, hoverinfo='skip',
-                ))
+                pitch_bu.scatter(long_xs, long_ys, ax=ax_bu, color=_RED, s=20, alpha=0.6, label="Long ball")
+            _mpl_legend(ax_bu)
+        bu_b64 = _fig_to_b64(fig_bu)
 
         # Aggregate F3 entry data from individual match analyses
         n_with = 0
@@ -384,8 +306,7 @@ def _build_offensive_analysis(opponent, opp_name):
                     ]),
                 ], md=4),
                 dbc.Col([
-                    dcc.Graph(figure=fig_bu, config={'displayModeBar': False},
-                              style={"height": "210px"}),
+                    html.Img(src=bu_b64, style={"width": "100%", "borderRadius": "8px"}),
                     html.Div("● Build-up starting positions", style={
                         "fontSize": "0.65rem", "color": "var(--text-secondary)",
                         "textAlign": "center", "marginTop": "4px",
@@ -431,20 +352,17 @@ def _build_offensive_analysis(opponent, opp_name):
 
     # ── 3. FINAL THIRD ENTRY ──────────────────────────────────
     try:
-        fig_f3 = _make_pitch_fig(x0=50, x1=100, show_f3=True, height=200)
+        pitch_f3, fig_f3, ax_f3 = _make_mpl_pitch(half=True, show_f3=True)
 
         if entry_coords:
-            # Color by entry method
             method_colors = {'Short Pass': _GOLD, 'Deep Pass': _RED, 'Ball Carry': _BLUE}
             for method, color in method_colors.items():
                 mxs = [c['x'] for c in entry_coords if isinstance(c, dict) and c.get('method') == method]
                 mys = [c['y'] for c in entry_coords if isinstance(c, dict) and c.get('method') == method]
                 if mxs:
-                    fig_f3.add_trace(go.Scatter(
-                        x=mxs, y=mys, mode='markers',
-                        marker=dict(color=color, size=6, opacity=0.7, symbol='diamond', line=dict(width=0)),
-                        name=method, showlegend=True, hoverinfo='skip',
-                    ))
+                    pitch_f3.scatter(mxs, mys, ax=ax_f3, color=color, s=45, alpha=0.7, marker='D', label=method)
+            _mpl_legend(ax_f3)
+        f3_b64 = _fig_to_b64(fig_f3)
 
         f3_section = _section_card(
             dbc.Row([
@@ -477,8 +395,7 @@ def _build_offensive_analysis(opponent, opp_name):
                     ]),
                 ], md=5),
                 dbc.Col([
-                    dcc.Graph(figure=fig_f3, config={'displayModeBar': False},
-                              style={"height": "200px"}),
+                    html.Img(src=f3_b64, style={"width": "100%", "borderRadius": "8px"}),
                     html.Div("◆ Final third entry points", style={
                         "fontSize": "0.65rem", "color": "var(--text-secondary)",
                         "textAlign": "center", "marginTop": "4px",
@@ -615,30 +532,27 @@ def _build_offensive_analysis(opponent, opp_name):
         for m in (xg_matches or []):
             all_shot_coords.extend(m.get('shot_coords', []))
 
-        fig_shots = _make_pitch_fig(x0=50, x1=100, height=230)
+        pitch_shots, fig_shots, ax_shots = _make_mpl_pitch(half=True)
 
         if all_shot_coords:
+            _MISS_C = (1.0, 1.0, 1.0, 0.3)
             for ev_type, color, label in [
-                ('Goal',        _GOLD,                    "Goal"),
-                ('Saved Shot',  _BLUE,                    "On Target"),
-                ('Miss',        "rgba(255,255,255,0.3)",  "Off Target"),
-                ('Post',        _PURPLE,                  "Post"),
+                ('Goal',       _GOLD,   "Goal"),
+                ('Saved Shot', _BLUE,   "On Target"),
+                ('Miss',       _MISS_C, "Off Target"),
+                ('Post',       _PURPLE, "Post"),
             ]:
                 grp = [s for s in all_shot_coords if s.get('event') == ev_type]
                 if grp:
                     gx  = [s['x'] for s in grp]
                     gy  = [s['y'] for s in grp]
                     gxg = [s.get('xG', 0) for s in grp]
-                    fig_shots.add_trace(go.Scatter(
-                        x=gx, y=gy, mode='markers',
-                        marker=dict(color=color,
-                                    size=[max(6, min(v * 60, 24)) for v in gxg],
-                                    opacity=0.75,
-                                    line=dict(color="rgba(255,255,255,0.15)", width=0.5)),
-                        name=label, showlegend=True,
-                        hovertemplate="xG: %{customdata:.2f}<extra></extra>",
-                        customdata=gxg,
-                    ))
+                    sizes = [max(30, min(v * 300, 500)) for v in gxg]
+                    pitch_shots.scatter(gx, gy, ax=ax_shots, color=color, s=sizes,
+                                       alpha=0.75, label=label,
+                                       edgecolors=(1, 1, 1, 0.15), linewidths=0.5)
+            _mpl_legend(ax_shots)
+        shots_b64 = _fig_to_b64(fig_shots)
 
         shot_section = _section_card(
             dbc.Row([
@@ -670,8 +584,7 @@ def _build_offensive_analysis(opponent, opp_name):
                     ]),
                 ], md=5),
                 dbc.Col([
-                    dcc.Graph(figure=fig_shots, config={'displayModeBar': False},
-                              style={"height": "230px"}),
+                    html.Img(src=shots_b64, style={"width": "100%", "borderRadius": "8px"}),
                     html.Div("Circle size = xG value", style={
                         "fontSize": "0.65rem", "color": "var(--text-secondary)",
                         "textAlign": "center", "marginTop": "4px",
@@ -706,7 +619,7 @@ def _build_defensive_analysis(opponent, opp_name):
         avg_line = round(profile.get('avg_def_line', 0), 1)
         total_actions = profile.get('total_def_actions', 0)
 
-        fig_def = _make_pitch_fig(height=220)
+        pitch_def, fig_def, ax_def = _make_mpl_pitch()
         if coords:
             import random
             sample = random.sample(coords, min(len(coords), 300))
@@ -716,17 +629,17 @@ def _build_defensive_analysis(opponent, opp_name):
                 by_type.setdefault(t, []).append(c)
             type_colors = {'Tackle': _GOLD, 'Interception': _BLUE, 'Clearance': _RED, 'Challenge': _PURPLE}
             for t, pts in by_type.items():
-                fig_def.add_trace(go.Scatter(
-                    x=[p['x'] for p in pts], y=[p['y'] for p in pts],
-                    mode='markers',
-                    marker=dict(color=type_colors.get(t, "rgba(255,255,255,0.3)"), size=5, opacity=0.55),
-                    name=t, showlegend=True, hoverinfo='skip',
-                ))
-            # Defensive line marker
-            fig_def.add_shape(type="line", x0=avg_line, y0=0, x1=avg_line, y1=100,
-                              line=dict(color=_GREEN, width=2, dash="dash"))
-            fig_def.add_annotation(x=avg_line, y=103, text=f"Avg Line: {avg_line}",
-                                   showarrow=False, font=dict(color=_GREEN, size=10))
+                pitch_def.scatter(
+                    [p['x'] for p in pts], [p['y'] for p in pts],
+                    ax=ax_def, color=type_colors.get(t, (1.0, 1.0, 1.0, 0.3)),
+                    s=20, alpha=0.55, label=t,
+                )
+            ax_def.axvline(x=avg_line, color=_GREEN, linestyle='--', linewidth=2)
+            ylim = ax_def.get_ylim()
+            ax_def.text(avg_line, ylim[1] * 0.97, f"Avg Line: {avg_line}",
+                        color=_GREEN, fontsize=9, ha='center', va='top')
+            _mpl_legend(ax_def)
+        def_b64 = _fig_to_b64(fig_def)
 
         sections.append(_section_card(
             dbc.Row([
@@ -739,7 +652,7 @@ def _build_defensive_analysis(opponent, opp_name):
                     ]),
                 ], md=5),
                 dbc.Col([
-                    dcc.Graph(figure=fig_def, config={'displayModeBar': False}, style={"height": "220px"}),
+                    html.Img(src=def_b64, style={"width": "100%", "borderRadius": "8px"}),
                     html.Div("● Defensive actions map  ── Avg line", style={
                         "fontSize": "0.65rem", "color": "var(--text-secondary)", "textAlign": "center", "marginTop": "4px",
                     }),
@@ -832,15 +745,14 @@ def _build_off_transitions_analysis(opponent, opp_name):
         coords = att_profile.get('coords', [])
 
         # ── 1. RECOVERY MAP ───────────────────────────────────
-        fig_rec = _make_pitch_fig(height=220)
+        pitch_rec, fig_rec, ax_rec = _make_mpl_pitch()
         if coords:
             import random
             sample = random.sample(coords, min(len(coords), 400))
-            fig_rec.add_trace(go.Scatter(
-                x=[c['x'] for c in sample], y=[c['y'] for c in sample],
-                mode='markers', marker=dict(color=_GOLD, size=5, opacity=0.5),
-                name="Ball Recovery", showlegend=True, hoverinfo='skip',
-            ))
+            pitch_rec.scatter([c['x'] for c in sample], [c['y'] for c in sample],
+                              ax=ax_rec, color=_GOLD, s=20, alpha=0.5, label="Ball Recovery")
+            _mpl_legend(ax_rec)
+        rec_b64 = _fig_to_b64(fig_rec)
 
         sections.append(_section_card(
             dbc.Row([
@@ -860,7 +772,7 @@ def _build_off_transitions_analysis(opponent, opp_name):
                     _bar_row("Final 3rd", round(zones.get('Final 3rd', 0) / max(total, 1) * 100, 1), _GREEN),
                 ], md=5),
                 dbc.Col([
-                    dcc.Graph(figure=fig_rec, config={'displayModeBar': False}, style={"height": "220px"}),
+                    html.Img(src=rec_b64, style={"width": "100%", "borderRadius": "8px"}),
                     html.Div("● Ball recovery positions", style={
                         "fontSize": "0.65rem", "color": "var(--text-secondary)", "textAlign": "center", "marginTop": "4px",
                     }),
@@ -912,15 +824,14 @@ def _build_def_transitions_analysis(opponent, opp_name):
         coords = def_profile.get('coords', [])
 
         # ── 1. BALL LOSS MAP ──────────────────────────────────
-        fig_loss = _make_pitch_fig(height=220)
+        pitch_loss, fig_loss, ax_loss = _make_mpl_pitch()
         if coords:
             import random
             sample = random.sample(coords, min(len(coords), 400))
-            fig_loss.add_trace(go.Scatter(
-                x=[c['x'] for c in sample], y=[c['y'] for c in sample],
-                mode='markers', marker=dict(color=_RED, size=5, opacity=0.5),
-                name="Ball Loss", showlegend=True, hoverinfo='skip',
-            ))
+            pitch_loss.scatter([c['x'] for c in sample], [c['y'] for c in sample],
+                               ax=ax_loss, color=_RED, s=20, alpha=0.5, label="Ball Loss")
+            _mpl_legend(ax_loss)
+        loss_b64 = _fig_to_b64(fig_loss)
 
         sections.append(_section_card(
             dbc.Row([
@@ -940,7 +851,7 @@ def _build_def_transitions_analysis(opponent, opp_name):
                     _bar_row("Final 3rd", round(zones.get('Final 3rd', 0) / max(total, 1) * 100, 1), _GREEN),
                 ], md=5),
                 dbc.Col([
-                    dcc.Graph(figure=fig_loss, config={'displayModeBar': False}, style={"height": "220px"}),
+                    html.Img(src=loss_b64, style={"width": "100%", "borderRadius": "8px"}),
                     html.Div("● Ball loss positions", style={
                         "fontSize": "0.65rem", "color": "var(--text-secondary)", "textAlign": "center", "marginTop": "4px",
                     }),

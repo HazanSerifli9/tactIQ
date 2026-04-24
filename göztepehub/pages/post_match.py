@@ -5,6 +5,13 @@ import os
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import base64
+import io
+from mplsoccer import Pitch
 from utils.data import extract_fixture_data, calculate_standings, get_data_dir, TEAM_LOGOS
 
 dash.register_page(__name__, path='/post-match', title='Göztepe Hub | Post-Match')
@@ -26,6 +33,28 @@ BLUE = "#3b82f6"
 PURPLE = "#a855f7"
 GREEN = "rgba(34,197,94,0.9)"
 
+_LEAGUE_CACHE = {}
+
+RADAR_METRICS = [
+    ('passes_pg',   'Passes/Game',    True),
+    ('pass_acc',    'Pass Accuracy',  True),
+    ('shots_pg',    'Shots/Game',     True),
+    ('xg_pg',       'xG/Game',        True),
+    ('press_rec_pg','High Turnovers', True),
+    ('xga_pg',      'Def. Solidity',  False),
+]
+
+BENCH_METRICS = [
+    ('passes_pg',   'Passes / Game',      True,  '{:.0f}'),
+    ('pass_acc',    'Pass Accuracy',       True,  '{:.1f}%'),
+    ('shots_pg',    'Shots / Game',        True,  '{:.1f}'),
+    ('xg_pg',       'xG / Game',          True,  '{:.2f}'),
+    ('press_rec_pg','High Turnovers',      True,  '{:.1f}'),
+    ('xga_pg',      'xGA / Game',         False, '{:.2f}'),
+    ('tackles_pg',  'Tackles / Game',     True,  '{:.1f}'),
+    ('ball_rec_pg', 'Ball Recoveries',    True,  '{:.1f}'),
+]
+
 
 def _load_goztepe_matches():
     data_dir = get_data_dir()
@@ -39,6 +68,224 @@ def _load_goztepe_matches():
         except Exception:
             continue
     return matches
+
+
+def _load_league_benchmarks():
+    if 'df' in _LEAGUE_CACHE:
+        return _LEAGUE_CACHE['df']
+
+    try:
+        from utils.xg_model import predict_xg
+    except ImportError:
+        predict_xg = lambda d: d
+
+    data_dir = get_data_dir()
+    files = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
+    acc = {}
+
+    for fn in files:
+        try:
+            df = pd.read_parquet(os.path.join(data_dir, fn))
+            df = predict_xg(df)
+        except Exception:
+            continue
+        for team in df['team_name'].unique():
+            tdf = df[df['team_name'] == team]
+            odf = df[df['team_name'] != team]
+            n_pass  = len(tdf[tdf['type_id'] == 1])
+            n_succ  = len(tdf[(tdf['type_id'] == 1) & (tdf['outcome'] == 1)])
+            n_shots = len(tdf[tdf['type_id'].isin([13, 14, 15, 16])])
+            if 'own goal' in tdf.columns:
+                n_goals = len(tdf[(tdf['type_id'] == 16) & (tdf['own goal'] != 'Si')])
+            else:
+                n_goals = len(tdf[tdf['type_id'] == 16])
+            n_tack  = len(tdf[tdf['type_id'] == 7])
+            n_rec   = len(tdf[tdf['type_id'] == 49])
+            n_press = len(tdf[(tdf['type_id'] == 49) & (tdf['x'] > 50)])
+            xg  = tdf['xG'].sum() if 'xG' in tdf.columns else 0
+            xga = odf['xG'].sum() if 'xG' in odf.columns else 0
+            if team not in acc:
+                acc[team] = dict(m=0, p=0, s=0, sh=0, g=0, t=0, r=0, pr=0, xg=0, xga=0)
+            a = acc[team]
+            a['m'] += 1; a['p'] += n_pass; a['s'] += n_succ; a['sh'] += n_shots
+            a['g'] += n_goals; a['t'] += n_tack; a['r'] += n_rec; a['pr'] += n_press
+            a['xg'] += xg; a['xga'] += xga
+
+    rows = []
+    for team, a in acc.items():
+        m = max(a['m'], 1)
+        rows.append(dict(team=team,
+            passes_pg=a['p']/m, pass_acc=a['s']/max(a['p'],1)*100,
+            shots_pg=a['sh']/m, goals_pg=a['g']/m,
+            xg_pg=a['xg']/m, xga_pg=a['xga']/m,
+            tackles_pg=a['t']/m, ball_rec_pg=a['r']/m, press_rec_pg=a['pr']/m))
+
+    result = pd.DataFrame(rows).set_index('team')
+    _LEAGUE_CACHE['df'] = result
+    return result
+
+
+def _build_benchmark_radar(league_df, rival):
+    def pct_series(col, hib):
+        s = league_df[col]
+        return (s.rank(pct=True) if hib else s.rank(pct=True, ascending=False)) * 100
+
+    pct_df = pd.DataFrame(
+        {col: pct_series(col, hib) for col, _, hib in RADAR_METRICS},
+        index=league_df.index
+    )
+
+    N = len(RADAR_METRICS)
+    labels = [lbl for _, lbl, _ in RADAR_METRICS]
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+
+    def row_vals(team):
+        if team not in pct_df.index:
+            return [50] * N
+        return pct_df.loc[team, [c for c, *_ in RADAR_METRICS]].tolist()
+
+    goz_v   = row_vals(GOZTEPE) + row_vals(GOZTEPE)[:1]
+    rival_v = row_vals(rival) + row_vals(rival)[:1]
+    avg_v   = [50] * (N + 1)
+    ang     = angles + angles[:1]
+
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={'projection': 'polar'}, facecolor=PITCH_BG)
+    ax.set_facecolor(PITCH_BG)
+
+    for ring in [25, 50, 75, 100]:
+        ax.plot(ang, [ring] * (N + 1), color='white', alpha=0.07, linewidth=0.5)
+
+    ax.plot(ang, avg_v,   color='white',  alpha=0.30, linewidth=1.2, linestyle='--', label='League Avg')
+    ax.fill(ang, avg_v,   color='white',  alpha=0.03)
+    ax.plot(ang, rival_v, color='#3b82f6', linewidth=1.8, label=_clean(rival))
+    ax.fill(ang, rival_v, color='#3b82f6', alpha=0.12)
+    ax.plot(ang, goz_v,   color='#ef4444', linewidth=2.3, label='Göztepe')
+    ax.fill(ang, goz_v,   color='#ef4444', alpha=0.18)
+    ax.scatter(angles, goz_v[:-1], color='#ef4444', s=45, zorder=5)
+
+    ax.set_xticks(angles)
+    ax.set_xticklabels(labels, size=9, color='white', fontweight='bold')
+    ax.set_ylim(0, 108)
+    ax.set_yticks([25, 50, 75, 100])
+    ax.set_yticklabels(['25th', '50th', '75th', '100th'], size=6.5, color=(1, 1, 1, 0.35))
+    ax.spines['polar'].set_visible(False)
+    ax.grid(color='white', alpha=0.07, linewidth=0.5)
+
+    legend = ax.legend(loc='upper right', bbox_to_anchor=(1.35, 1.18), fontsize=9)
+    legend.get_frame().set_facecolor(PITCH_BG)
+    legend.get_frame().set_alpha(0.85)
+    legend.get_frame().set_edgecolor('rgba(255,255,255,0.2)')
+    for t in legend.get_texts():
+        t.set_color('white')
+
+    return _fig_to_base64(fig)
+
+
+def _build_benchmarking_section(rival, opp_name):
+    try:
+        league_df = _load_league_benchmarks()
+    except Exception as e:
+        return html.Div(f"Benchmark data unavailable: {e}", className="goz-card-desc")
+
+    radar_b64 = _build_benchmark_radar(league_df, rival)
+
+    def rank_of(team, col, hib):
+        if team not in league_df.index:
+            return '-'
+        s = league_df[col]
+        return int(s.rank(ascending=not hib, method='min')[team])
+
+    def val_of(team, col):
+        if team not in league_df.index:
+            return 0
+        return league_df.loc[team, col]
+
+    n_teams = len(league_df)
+
+    metric_rows = []
+    for col, label, hib, fmt in BENCH_METRICS:
+        gv = val_of(GOZTEPE, col)
+        rv = val_of(rival, col)
+        gr = rank_of(GOZTEPE, col, hib)
+        rr = rank_of(rival, col, hib)
+        rival_better = (hib and rv > gv) or (not hib and rv < gv)
+        delta = rv - gv if hib else gv - rv
+        delta_str = f"+{abs(delta):.1f}" if delta > 0 else f"−{abs(delta):.1f}"
+
+        metric_rows.append(html.Div(style={
+            "display": "flex", "alignItems": "center", "gap": "6px",
+            "padding": "7px 10px", "borderRadius": "8px", "marginBottom": "5px",
+            "background": "rgba(239,68,68,0.07)" if rival_better else "rgba(34,197,94,0.05)",
+            "border": "1px solid rgba(239,68,68,0.18)" if rival_better else "1px solid rgba(34,197,94,0.14)",
+        }, children=[
+            html.Span(label, style={"flex": "1.8", "fontSize": "0.76rem",
+                "color": "var(--text-secondary)", "fontWeight": "500"}),
+            html.Div(style={"flex": "1", "textAlign": "center"}, children=[
+                html.Span(fmt.format(gv), style={"fontWeight": "700", "color": RED, "fontSize": "0.88rem"}),
+                html.Span(f" #{gr}", style={"fontSize": "0.62rem", "color": "var(--text-secondary)"}),
+            ]),
+            html.Span("▲" if rival_better else "▼", style={
+                "fontSize": "0.75rem", "width": "14px", "textAlign": "center",
+                "color": RED if rival_better else "#22c55e",
+            }),
+            html.Div(style={"flex": "1", "textAlign": "center"}, children=[
+                html.Span(fmt.format(rv), style={"fontWeight": "700", "color": BLUE, "fontSize": "0.88rem"}),
+                html.Span(f" #{rr}", style={"fontSize": "0.62rem", "color": "var(--text-secondary)"}),
+            ]),
+            html.Span(delta_str, style={
+                "fontSize": "0.68rem", "width": "36px", "textAlign": "right",
+                "color": RED if rival_better else "#22c55e", "fontWeight": "600",
+            }),
+        ]))
+
+    goz_rank_xg  = rank_of(GOZTEPE, 'xg_pg',   True)
+    goz_rank_pass = rank_of(GOZTEPE, 'passes_pg', True)
+    goz_rank_acc  = rank_of(GOZTEPE, 'pass_acc', True)
+
+    return html.Div(className="goz-form-section", style={"marginTop": "24px"}, children=[
+        html.Div(className="goz-section-header", style={"marginBottom": "20px"}, children=[
+            html.Span("LEAGUE BENCHMARKING", className="goz-card-title"),
+            html.P(
+                f"Season-wide per-game averages · Göztepe vs {opp_name} vs all {n_teams} teams",
+                className="goz-card-desc",
+            ),
+        ]),
+        dbc.Row([
+            dbc.Col([
+                html.Div("STYLE PROFILE — PERCENTILE RANK", style={
+                    "fontSize": "0.72rem", "fontWeight": "700", "color": GOLD,
+                    "letterSpacing": "1px", "marginBottom": "8px", "textAlign": "center",
+                }),
+                html.Img(src=radar_b64, style={"width": "100%", "borderRadius": "8px"}),
+            ], md=6),
+            dbc.Col([
+                html.Div(style={
+                    "display": "flex", "gap": "6px", "padding": "0 4px",
+                    "marginBottom": "10px", "alignItems": "center",
+                }, children=[
+                    html.Span("Metric", style={"flex": "1.8", "fontSize": "0.65rem",
+                        "color": "var(--text-secondary)", "textTransform": "uppercase"}),
+                    html.Span("Göztepe", style={"flex": "1", "textAlign": "center",
+                        "fontSize": "0.65rem", "color": RED, "fontWeight": "700", "textTransform": "uppercase"}),
+                    html.Span("", style={"width": "14px"}),
+                    html.Span(opp_name[:10], style={"flex": "1", "textAlign": "center",
+                        "fontSize": "0.65rem", "color": BLUE, "fontWeight": "700", "textTransform": "uppercase",
+                        "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+                    html.Span("Δ", style={"width": "36px", "textAlign": "right",
+                        "fontSize": "0.65rem", "color": "var(--text-secondary)"}),
+                ]),
+                html.Div(children=metric_rows),
+                html.Div(style={"marginTop": "16px", "padding": "10px 12px", "borderRadius": "8px",
+                    "background": "rgba(255,255,255,0.03)", "border": "1px solid var(--border-color)",
+                    "fontSize": "0.72rem", "color": "var(--text-secondary)", "lineHeight": "1.8"}, children=[
+                    html.Span("Context: ", style={"fontWeight": "700", "color": GOLD}),
+                    f"Göztepe rank #{goz_rank_xg}/18 in xG, #{goz_rank_pass}/18 in passing volume, "
+                    f"#{goz_rank_acc}/18 in pass accuracy. "
+                    "▲ = rival outperforms Göztepe on this metric.",
+                ]),
+            ], md=6),
+        ]),
+    ])
 
 
 def _get_rival_last5(rival):
@@ -163,25 +410,24 @@ def _build_h2h_section(rival, opp_name):
         o_xg = round(opp_df['xG'].sum(), 2) if 'xG' in opp_df.columns else 0
 
         # Shot map
-        fig_shots = _make_pitch(x0=0, x1=100, height=240)
+        pitch, fig_shots, ax_shots = _make_mplsoccer_pitch()
+        _COLOR_MISS = (1.0, 1.0, 1.0, 0.3)
         for team_df, team_label, base_color in [(goz_df, goz_short, GOLD), (opp_df, opp_name, RED)]:
             for ev_type, color, label in [
                 ('Goal', base_color, f"{team_label} Goal"),
                 ('Saved Shot', BLUE if team_label == goz_short else PURPLE, f"{team_label} On Target"),
-                ('Miss', "rgba(255,255,255,0.25)", f"{team_label} Off Target"),
+                ('Miss', _COLOR_MISS, f"{team_label} Off Target"),
             ]:
                 grp = team_df[team_df['event'] == ev_type]
                 if not grp.empty:
                     xg_vals = grp['xG'].tolist() if 'xG' in grp.columns else [0.05] * len(grp)
-                    fig_shots.add_trace(go.Scatter(
-                        x=grp['x'].tolist(), y=grp['y'].tolist(), mode='markers',
-                        marker=dict(color=color, size=[max(7, min(v * 55, 22)) for v in xg_vals],
-                                    opacity=0.8, line=dict(width=0.5, color="rgba(255,255,255,0.15)")),
-                        name=label, showlegend=True, hoverinfo='skip',
-                    ))
+                    pitch.scatter(grp['x'].values, grp['y'].values, s=[max(50, min(v * 200, 400)) for v in xg_vals],
+                                 color=color, alpha=0.8, ax=ax_shots, label=label, edgecolors='white', linewidth=0.5)
+        _mpl_legend(ax_shots)
+        shot_map_b64 = _fig_to_base64(fig_shots)
 
         # Avg positions
-        fig_pos = _make_pitch(x0=0, x1=100, height=260)
+        pitch, fig_pos, ax_pos = _make_mplsoccer_pitch()
         for team_df, team_name_full, color in [(goz_df, GOZTEPE, GOLD), (opp_df, rival, RED)]:
             players = team_df.groupby('player_name').agg(
                 avg_x=('x', 'mean'), avg_y=('y', 'mean'), actions=('event', 'count')
@@ -194,13 +440,18 @@ def _build_h2h_section(rival, opp_name):
                         jn = r.get('Jersey Number')
                         if pd.notna(jn):
                             jersey[r['player_name']] = str(int(jn))
-                fig_pos.add_trace(go.Scatter(
-                    x=players['avg_x'].tolist(), y=players['avg_y'].tolist(), mode='markers+text',
-                    marker=dict(color=color, size=20, opacity=0.85, line=dict(width=1.5, color="#fff")),
-                    text=[jersey.get(p, p.split()[-1][:3]) for p in players['player_name']],
-                    textposition='top center', textfont=dict(size=8, color="rgba(255,255,255,0.8)"),
-                    name=_clean(team_name_full), showlegend=True, hoverinfo='skip',
-                ))
+                pitch.scatter(players['avg_x'].values, players['avg_y'].values, s=300,
+                             color=color, alpha=0.85, ax=ax_pos, label=_clean(team_name_full),
+                             edgecolors='white', linewidth=1.5)
+                for _, row in players.iterrows():
+                    jersey_text = jersey.get(row['player_name'], row['player_name'].split()[-1][:3])
+                    ax_pos.text(row['avg_x'], row['avg_y'], jersey_text, ha='center', va='center',
+                               fontsize=7, color='white', weight='bold')
+        _mpl_legend(ax_pos)
+        pos_map_b64 = _fig_to_base64(fig_pos)
+
+        # Zone activity map
+        zone_map_b64 = _build_zone_map_img(goz_df, opp_df, goz_short, opp_name)
 
         def _stat_row(label, gv, ov):
             return html.Div(style={
@@ -247,13 +498,21 @@ def _build_h2h_section(rival, opp_name):
                 dbc.Col([
                     html.Div("SHOT MAP", style={"fontSize": "0.72rem", "fontWeight": "700",
                         "color": GOLD, "letterSpacing": "1px", "marginBottom": "6px", "textAlign": "center"}),
-                    dcc.Graph(figure=fig_shots, config={'displayModeBar': False}, style={"height": "240px"}),
+                    html.Img(src=shot_map_b64, style={"width": "100%", "maxWidth": "100%", "borderRadius": "8px"}),
                 ], md=6),
                 dbc.Col([
                     html.Div("AVERAGE POSITIONS", style={"fontSize": "0.72rem", "fontWeight": "700",
                         "color": GOLD, "letterSpacing": "1px", "marginBottom": "6px", "textAlign": "center"}),
-                    dcc.Graph(figure=fig_pos, config={'displayModeBar': False}, style={"height": "260px"}),
+                    html.Img(src=pos_map_b64, style={"width": "100%", "maxWidth": "100%", "borderRadius": "8px"}),
                 ], md=6),
+            ]),
+            dbc.Row([
+                dbc.Col([
+                    html.Div("ZONE ACTIVITY MAP", style={"fontSize": "0.72rem", "fontWeight": "700",
+                        "color": GOLD, "letterSpacing": "1px", "marginBottom": "6px",
+                        "textAlign": "center", "marginTop": "16px"}),
+                    html.Img(src=zone_map_b64, style={"width": "100%", "borderRadius": "8px"}),
+                ], md=12),
             ]),
         ])
         sections.append(match_card)
@@ -263,6 +522,120 @@ def _build_h2h_section(rival, opp_name):
             html.Span(f"Göztepe vs {opp_name} — Match Reports", className="goz-card-title"),
         ]),
     ] + sections)
+
+
+def _fig_to_base64(fig):
+    """Convert matplotlib figure to base64 encoded PNG for embedding in HTML"""
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format='png', dpi=100, bbox_inches='tight', facecolor='#0e1b0f', edgecolor='none')
+    buffer.seek(0)
+    image_base64 = base64.b64encode(buffer.read()).decode()
+    plt.close(fig)
+    return f"data:image/png;base64,{image_base64}"
+
+
+def _make_mplsoccer_pitch(half=False):
+    """Create a mplsoccer pitch figure"""
+    pitch = Pitch(pitch_type='opta', pitch_color='#0e1b0f', line_color=(1.0, 1.0, 1.0, 0.55), linewidth=1.5, half=half)
+    fig, ax = pitch.draw(figsize=(10, 6.5))
+    fig.patch.set_facecolor('#0e1b0f')
+    return pitch, fig, ax
+
+
+def _mpl_legend(ax):
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    legend = ax.legend(handles, labels, loc='upper left', fontsize=8)
+    frame = legend.get_frame()
+    frame.set_facecolor('#0e1b0f')
+    frame.set_alpha(0.75)
+    frame.set_edgecolor('white')
+    for text in legend.get_texts():
+        text.set_color('white')
+
+
+def _build_zone_map_img(goz_df, opp_df, goz_short, opp_name):
+    EXCLUDE = {32, 34, 30, 31, 35, 37, 38}
+
+    def clean(df):
+        return df[df['x'].between(0.5, 99.5) & df['y'].between(0.5, 99.5) & ~df['type_id'].isin(EXCLUDE)]
+
+    gd, od = clean(goz_df), clean(opp_df)
+    COLS, ROWS = 6, 5
+
+    def count_grid(df):
+        if df.empty:
+            return np.zeros((ROWS, COLS), dtype=int)
+        xi = np.clip((df['x'].values / 100 * COLS).astype(int), 0, COLS - 1)
+        yi = np.clip((df['y'].values / 100 * ROWS).astype(int), 0, ROWS - 1)
+        g = np.zeros((ROWS, COLS), dtype=int)
+        np.add.at(g, (yi, xi), 1)
+        return g
+
+    goz_g = count_grid(gd)
+    opp_g = count_grid(od)
+    n_goz, n_opp = len(gd), len(od)
+    poss_goz = round(n_goz / max(n_goz + n_opp, 1) * 100)
+    poss_opp = 100 - poss_goz
+
+    GOZ_RGB = np.array([0.545, 0.082, 0.118])
+    OPP_RGB = np.array([0.102, 0.231, 0.420])
+
+    fig = plt.figure(figsize=(13, 9.5), facecolor='#b4c8dc')
+    ax_pitch = fig.add_axes([0, 0.12, 1, 0.88])
+    pitch = Pitch(pitch_type='opta', pitch_color='#3a6e3a', line_color=(1, 1, 1, 0.45), linewidth=1.5)
+    pitch.draw(ax=ax_pitch)
+
+    x_edges = np.linspace(0, 100, COLS + 1)
+    y_edges = np.linspace(0, 100, ROWS + 1)
+
+    for ri in range(ROWS):
+        for ci in range(COLS):
+            x0, x1 = x_edges[ci], x_edges[ci + 1]
+            y0, y1 = y_edges[ri], y_edges[ri + 1]
+            gc, oc = int(goz_g[ri, ci]), int(opp_g[ri, ci])
+            tot = gc + oc
+            if tot == 0:
+                face = (0.22, 0.44, 0.22, 0.50)
+            else:
+                rgb = (gc / tot) * GOZ_RGB + (oc / tot) * OPP_RGB
+                face = (*rgb.tolist(), 0.82)
+            ax_pitch.add_patch(mpatches.Rectangle(
+                (x0, y0), x1 - x0, y1 - y0,
+                facecolor=face, edgecolor='white', linewidth=0.7, zorder=2
+            ))
+            ax_pitch.text(
+                (x0 + x1) / 2, (y0 + y1) / 2, f"{gc} / {oc}",
+                ha='center', va='center', fontsize=9.5,
+                color='white', fontweight='bold', zorder=3
+            )
+
+    ax_bar = fig.add_axes([0.04, 0.01, 0.92, 0.10])
+    ax_bar.set_xlim(0, 100)
+    ax_bar.set_ylim(0, 1)
+    ax_bar.axis('off')
+    ax_bar.set_facecolor('#1a2535')
+
+    ax_bar.add_patch(mpatches.Rectangle((0, 0.1), poss_goz, 0.8, facecolor='#7a1520', zorder=2))
+    ax_bar.add_patch(mpatches.Rectangle((poss_goz, 0.1), poss_opp, 0.8, facecolor='#1a3b6b', zorder=2))
+
+    ax_bar.text(poss_goz / 2, 0.5, f'{poss_goz}%',
+                ha='center', va='center', fontsize=14, fontweight='bold', color='white', zorder=3)
+    ax_bar.text(poss_goz + poss_opp / 2, 0.5, f'{poss_opp}%',
+                ha='center', va='center', fontsize=14, fontweight='bold', color='white', zorder=3)
+
+    ax_bar.text(8, 0.5, '→', ha='center', va='center', fontsize=26, color='#f5d060', alpha=0.75, zorder=4)
+    ax_bar.text(92, 0.5, '←', ha='center', va='center', fontsize=26, color='white', alpha=0.75, zorder=4)
+    ax_bar.text(1, 0.15, goz_short, ha='left', va='bottom', fontsize=8, color='#f5d060', fontweight='bold', zorder=3)
+    ax_bar.text(99, 0.15, opp_name, ha='right', va='bottom', fontsize=8, color='white', fontweight='bold', zorder=3)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=110, bbox_inches='tight', facecolor='#b4c8dc', edgecolor='none')
+    buf.seek(0)
+    img_b64 = f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
+    plt.close(fig)
+    return img_b64
 
 
 def _make_pitch(x0=0, x1=100, height=200):
@@ -323,7 +696,8 @@ def layout():
             ]),
         ]),
         html.Div(className="content-container", style={"padding": "0 20px 60px"}, children=[
-            html.Div(id='post-match-form-container', style={"marginTop": "30px"}),
+            html.Div(id='post-match-benchmark-container', style={"marginTop": "30px"}),
+            html.Div(id='post-match-form-container', style={"marginTop": "24px"}),
             html.Div(id='post-match-h2h-container', style={"marginTop": "24px"}),
         ]),
         html.Footer(className="footer", children=[
@@ -336,14 +710,16 @@ def layout():
 
 
 @callback(
-    [Output('post-match-form-container', 'children'),
+    [Output('post-match-benchmark-container', 'children'),
+     Output('post-match-form-container', 'children'),
      Output('post-match-h2h-container', 'children')],
     [Input('post-match-rival-selector', 'value')]
 )
 def update_post_match(rival):
     if not rival:
-        return html.Div(), html.Div()
+        return html.Div(), html.Div(), html.Div()
     opp_name = _clean(rival)
+    benchmark = _build_benchmarking_section(rival, opp_name)
     form = _build_form_section(rival, opp_name)
     h2h = _build_h2h_section(rival, opp_name)
-    return form, h2h
+    return benchmark, form, h2h

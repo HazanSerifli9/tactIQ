@@ -22,6 +22,7 @@ def navbar():
             dcc.Link("Players", href="/player-analysis", className="nav-link custom-link"),
             html.A("Göztepe Hub", href="http://127.0.0.1:8051", target="_blank", className="nav-link custom-link highlight-link"),
             dcc.Link("Fixtures", href="/fixtures", className="nav-link custom-link"),
+            
         ], className="d-flex gap-4 align-items-center ms-auto"),
         
     ], className="navbar fixed-top px-4 py-3 glass-nav")

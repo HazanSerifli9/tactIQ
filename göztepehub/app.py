@@ -7,6 +7,11 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+# Must be set before any matplotlib/mplsoccer import — Dash runs callbacks
+# on background threads which crash the macOS GUI backend.
+import matplotlib
+matplotlib.use('Agg')
+
 import dash
 from dash import Dash, html, dcc
 import dash_bootstrap_components as dbc
