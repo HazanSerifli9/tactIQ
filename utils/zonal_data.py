@@ -4,7 +4,7 @@ import numpy as np
 import os
 from typing import List, Dict, Tuple, Any
 from utils.data import get_data_dir
-from utils.visuals import calculate_xt
+from utils.xt_data import calculate_xt_for_events
 
 def process_zonal_data(league: str = "Süper Lig", year: str = "2024", min_mins: int = 300) -> Tuple[List[Dict[str, Any]], int, int]:
     """
@@ -77,7 +77,7 @@ def process_zonal_data(league: str = "Süper Lig", year: str = "2024", min_mins:
                 player_mins[p] = player_mins.get(p, 0) + m
 
             # --- 2. Identify Threat Events ---
-            df_passes_xt = calculate_xt(df)
+            df_passes_xt = calculate_xt_for_events(df)
             if df_passes_xt.empty:
                 continue
                 

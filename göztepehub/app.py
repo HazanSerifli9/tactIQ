@@ -32,6 +32,7 @@ def navbar():
         html.Div([
             dcc.Link("Overview", href="/", className="nav-link custom-link highlight-link"),
             dcc.Link("Pre-Match", href="/pre-match", className="nav-link custom-link"),
+            dcc.Link("Rival Scout", href="/rival-scout", className="nav-link custom-link"),
             dcc.Link("Post-Match", href="/post-match", className="nav-link custom-link"),
             dcc.Link("Trends", href="/trends", className="nav-link custom-link"),
         ], className="d-flex gap-4 align-items-center ms-auto"),

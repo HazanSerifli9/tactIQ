@@ -174,7 +174,7 @@ def _build_benchmark_radar(league_df, rival):
     legend = ax.legend(loc='upper right', bbox_to_anchor=(1.35, 1.18), fontsize=9)
     legend.get_frame().set_facecolor(PITCH_BG)
     legend.get_frame().set_alpha(0.85)
-    legend.get_frame().set_edgecolor('rgba(255,255,255,0.2)')
+    legend.get_frame().set_edgecolor((1, 1, 1, 0.2))
     for t in legend.get_texts():
         t.set_color('white')
 
@@ -702,7 +702,7 @@ def layout():
         ]),
         html.Footer(className="footer", children=[
             html.Div(className="footer-inner", children=[
-                html.Div("© TactIQ Göztepe Hub — Precision Analytics", className="footer-text"),
+                html.Div("© tactIQ Göztepe Hub — Precision Analytics", className="footer-text"),
                 html.Img(src="/assets/superlig_logo.jpg", className="superlogo"),
             ])
         ])

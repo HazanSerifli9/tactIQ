@@ -934,7 +934,7 @@ def layout():
 
         html.Footer(className="footer", children=[
             html.Div(className="footer-inner", children=[
-                html.Div("© TactIQ Göztepe Hub — Precision Analytics", className="footer-text"),
+                html.Div("© tactIQ Göztepe Hub — Precision Analytics", className="footer-text"),
                 html.Img(src="/assets/superlig_logo.jpg", className="superlogo"),
             ])
         ])
