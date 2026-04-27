@@ -191,8 +191,8 @@ def layout(match_id=None):
                                 f"{h_sepp['efficiency']}%", f"{a_sepp['efficiency']}%"),
                 create_kpi_card("Total Build-ups",
                                 "How many times you built from the back",
-                                safe_get_b(h_buildup, 'total_buildups', 'total'),
-                                safe_get_b(a_buildup, 'total_buildups', 'total')),
+                                h_buildup.get('total_buildups', '-') if h_buildup else '-',
+                                a_buildup.get('total_buildups', '-') if a_buildup else '-'),
                 create_kpi_card("Final Third Entries",
                                 "% of build-ups that reached the attacking third",
                                 f"{safe_get_b(h_buildup, 'outcomes_15s', 'f3_entry_pct')}%",
@@ -239,14 +239,13 @@ def layout(match_id=None):
         bt_data = home_bt   if team == home_team else away_bt
         t_data  = home_tempo if team == home_team else away_tempo
         plots[f"{team}_prog"]            = safe_plot(visuals.plot_progressive_pass_map, df, team)
-        plots[f"{team}_network"]         = safe_plot(visuals.plot_pass_network, df, team)
+        plots[f"{team}_hybrid"]          = safe_plot(tempo_visuals.plot_hybrid_pass_network, df, team, t_data)
         plots[f"{team}_xt"]              = safe_plot(visuals.plot_xt_leaders, df, team)
         plots[f"{team}_startxi"]         = safe_plot(visuals.plot_starting_xi, df, team)
         plots[f"{team}_defense"]         = safe_plot(visuals.plot_defensive_block, df, team)
         plots[f"{team}_bt_map"]          = safe_plot(bt_visuals.plot_ball_time_map,      bt_data, team)
         plots[f"{team}_bt_bars"]         = safe_plot(bt_visuals.plot_thirds_flanks_bars, bt_data, team)
         plots[f"{team}_bt_line"]         = safe_plot(bt_visuals.plot_ball_timeline,      bt_data, team)
-        plots[f"{team}_tempo"]           = safe_plot(tempo_visuals.plot_tempo_network,   t_data,  team)
         plots[f"{team}_obv_pitch"]       = safe_plot(obv_visuals.plot_obv_pitch,         df_obv,  team)
         plots[f"{team}_obv_leaderboard"] = safe_plot(obv_visuals.plot_obv_leaderboard,   df_obv,  team)
 
@@ -299,22 +298,22 @@ def layout(match_id=None):
 
         possession_tempo = html.Div([
             html.Div([
-                html.H3("Passing Network", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "10px"}),
-                html.Img(src=get_img(f'{team_name}_network'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"})
-            ], className="visualization-card", style={"marginBottom": "30px"}),
-            html.Div([
-                html.H3("Team Tempo Network", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "10px"}),
+                html.H3("Pass · Tempo Network", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "4px"}),
+                html.P("Pass volume (edge width) + Tempo / speed of play (edge colour) + Carry events + Player roles — all in one view.",
+                       style={"color": "#9ca3af", "fontSize": "0.8rem", "marginBottom": "12px"}),
+                html.Img(src=get_img(f'{team_name}_hybrid'), className="plot-img",
+                         style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"}),
                 html.Div([
-                    html.Div([
-                        html.Img(src=get_img(f'{team_name}_tempo'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"})
-                    ], style={"flex": "1", "minWidth": "300px"}),
-                    html.Div([
-                        html.Div("PLAYER TEMPO PROFILES", style={"textAlign": "center", "fontWeight": "bold", "marginBottom": "5px", "color": "#e5e7eb"}),
-                        html.Div("Release speed, carry contribution & tactical role", style={"textAlign": "center", "fontSize": "0.8rem", "marginBottom": "10px", "color": "#a0aec0"}),
-                        create_tempo_table(t_data.get("profiles", []))
-                    ], style={"flex": "1", "minWidth": "300px", "background": "rgba(255,255,255,0.03)",
-                              "padding": "15px", "borderRadius": "12px", "border": "1px solid var(--border-color)"}),
-                ], style={"display": "flex", "flexWrap": "wrap", "gap": "20px"}),
+                    html.Div("PLAYER TEMPO PROFILES", style={"textAlign": "center", "fontWeight": "bold",
+                                                              "marginBottom": "5px", "color": "#e5e7eb",
+                                                              "marginTop": "18px"}),
+                    html.Div("Release speed, carry contribution & tactical role",
+                             style={"textAlign": "center", "fontSize": "0.8rem",
+                                    "marginBottom": "10px", "color": "#a0aec0"}),
+                    create_tempo_table(t_data.get("profiles", [])),
+                ], style={"background": "rgba(255,255,255,0.03)", "padding": "15px",
+                           "borderRadius": "12px", "border": "1px solid var(--border-color)",
+                           "marginTop": "16px"}),
             ], className="visualization-card", style={"marginBottom": "30px"}),
         ], style={"padding": "20px 0"})
 

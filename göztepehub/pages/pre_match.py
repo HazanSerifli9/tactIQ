@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from mplsoccer import Pitch
 import base64
 import io
+import plotly.graph_objects as go
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
 from utils.data import extract_fixture_data, calculate_standings
@@ -123,6 +124,94 @@ def _make_mpl_pitch(half=False, show_f3=False, figsize=(10, 6.5)):
     return pitch, fig, ax
 
 
+def _plotly_buildup_figure(coords):
+    """Plotly pitch — own defensive half, Opta 0-100 coords, x=0 own goal."""
+    _BG    = _PITCH_BG
+    _LC    = "rgba(255,255,255,0.50)"
+
+    fig = go.Figure()
+
+    fig.add_shape(type="rect", x0=-2, y0=-2, x1=52, y1=102,
+                  fillcolor="#0d2210", layer="below", line=dict(width=0))
+
+    def _line(x0, y0, x1, y1, color=_LC, width=1.5, dash=None):
+        kw = dict(color=color, width=width)
+        if dash:
+            kw["dash"] = dash
+        fig.add_shape(type="line", x0=x0, y0=y0, x1=x1, y1=y1,
+                      line=kw, layer="below")
+
+    # Touchlines + goal line + halfway
+    _line(0, 0, 0, 100)
+    _line(0, 0, 52, 0)
+    _line(0, 100, 52, 100)
+    _line(50, 0, 50, 100)
+    # Large penalty area
+    _line(0, 21.1, 17, 21.1); _line(0, 78.9, 17, 78.9); _line(17, 21.1, 17, 78.9)
+    # 6-yard box
+    _line(0, 36.8, 5.8, 36.8); _line(0, 63.2, 5.8, 63.2); _line(5.8, 36.8, 5.8, 63.2)
+    # Goal
+    fig.add_shape(type="rect", x0=-2, y0=44.5, x1=0, y1=55.5,
+                  fillcolor="rgba(255,255,255,0.04)",
+                  line=dict(color="rgba(255,255,255,0.7)", width=2.5), layer="above")
+    # Penalty spot
+    fig.add_shape(type="circle", x0=10.6, y0=49.6, x1=11.4, y1=50.4,
+                  fillcolor=_LC, line=dict(width=0), layer="below")
+    # Center arc (left semicircle visible at x<52)
+    theta = np.linspace(np.pi / 2, 3 * np.pi / 2, 80)
+    arc_x = 50 + 9 * np.cos(theta)
+    arc_y = 50 + 9 * np.sin(theta)
+    mask = arc_x <= 52
+    if mask.any():
+        fig.add_trace(go.Scatter(x=arc_x[mask].tolist(), y=arc_y[mask].tolist(),
+                                 mode="lines", line=dict(color=_LC, width=1.5),
+                                 hoverinfo="skip", showlegend=False))
+    # Zone dividers (Left / Center / Right channels)
+    _line(0, 33.3, 52, 33.3, color="rgba(59,130,246,0.25)", dash="dot")
+    _line(0, 66.7, 52, 66.7, color="rgba(168,85,247,0.25)", dash="dot")
+
+    # Data points
+    short_pts = [(c['x'], c['y']) for c in coords
+                 if isinstance(c, dict) and c.get('pass_type') == 'Short'
+                 and 0 <= c.get('x', 999) <= 52 and 0 <= c.get('y', -1) <= 100]
+    long_pts  = [(c['x'], c['y']) for c in coords
+                 if isinstance(c, dict) and c.get('pass_type') == 'Long'
+                 and 0 <= c.get('x', 999) <= 52 and 0 <= c.get('y', -1) <= 100]
+
+    if short_pts:
+        fig.add_trace(go.Scatter(
+            x=[p[0] for p in short_pts], y=[p[1] for p in short_pts],
+            mode="markers", marker=dict(color=_GOLD, size=5, opacity=0.45, line=dict(width=0)),
+            name="Short build-up", hoverinfo="skip",
+        ))
+    if long_pts:
+        fig.add_trace(go.Scatter(
+            x=[p[0] for p in long_pts], y=[p[1] for p in long_pts],
+            mode="markers", marker=dict(color=_RED, size=5, opacity=0.45, line=dict(width=0)),
+            name="Long ball", hoverinfo="skip",
+        ))
+
+    # Attack direction arrow
+    fig.add_annotation(x=52, y=4, ax=44, ay=4, xref="x", yref="y", axref="x", ayref="y",
+                       arrowhead=2, arrowsize=1.2, arrowwidth=2, arrowcolor=_GOLD)
+    fig.add_annotation(x=43, y=4, text="ATTACK →", xref="x", yref="y",
+                       showarrow=False, font=dict(color=_GOLD, size=8), xanchor="right")
+
+    fig.update_layout(
+        xaxis=dict(range=[-3, 53], showgrid=False, zeroline=False,
+                   showticklabels=False, fixedrange=True, constrain="domain"),
+        yaxis=dict(range=[-3, 103], showgrid=False, zeroline=False,
+                   showticklabels=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        plot_bgcolor=_BG, paper_bgcolor=_BG,
+        margin=dict(l=5, r=5, t=5, b=5),
+        legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center",
+                    font=dict(color="white", size=9), bgcolor="rgba(0,0,0,0)",
+                    itemsizing="constant"),
+        height=400,
+    )
+    return fig
+
+
 def _fig_to_b64(fig):
     """Convert matplotlib figure to a base64 data URI."""
     buf = io.BytesIO()
@@ -234,19 +323,8 @@ def _build_offensive_analysis(opponent, opp_name):
         center_pct = float(zone.get('center_pct', 34))
         right_pct  = float(zone.get('right_pct',  33))
 
-        # Buildup start pitch — color by pass type
-        pitch_bu, fig_bu, ax_bu = _make_mpl_pitch(show_f3=True)
-        if coords:
-            short_xs = [c['x'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Short']
-            short_ys = [c['y'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Short']
-            long_xs  = [c['x'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Long']
-            long_ys  = [c['y'] for c in coords if isinstance(c, dict) and c.get('pass_type') == 'Long']
-            if short_xs:
-                pitch_bu.scatter(short_xs, short_ys, ax=ax_bu, color=_GOLD, s=20, alpha=0.6, label="Short build-up")
-            if long_xs:
-                pitch_bu.scatter(long_xs, long_ys, ax=ax_bu, color=_RED, s=20, alpha=0.6, label="Long ball")
-            _mpl_legend(ax_bu)
-        bu_b64 = _fig_to_b64(fig_bu)
+        # Buildup start pitch — Plotly, own half (Opta x=0 own goal, x=50 midfield)
+        fig_bu_plotly = _plotly_buildup_figure(coords)
 
         # Aggregate F3 entry data from individual match analyses
         n_with = 0
@@ -306,11 +384,11 @@ def _build_offensive_analysis(opponent, opp_name):
                     ]),
                 ], md=4),
                 dbc.Col([
-                    html.Img(src=bu_b64, style={"width": "100%", "borderRadius": "8px"}),
-                    html.Div("● Build-up starting positions", style={
-                        "fontSize": "0.65rem", "color": "var(--text-secondary)",
-                        "textAlign": "center", "marginTop": "4px",
-                    }),
+                    dcc.Graph(figure=fig_bu_plotly, config={"displayModeBar": False},
+                              style={"borderRadius": "8px", "overflow": "hidden"}),
+                    html.Div("● Build-up starting positions — own defensive half",
+                             style={"fontSize": "0.65rem", "color": "var(--text-secondary)",
+                                    "textAlign": "center", "marginTop": "4px"}),
                 ], md=8),
             ]),
             title=f"{opp_name} — Build-up Style", icon="⚽"
