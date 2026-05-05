@@ -17,9 +17,10 @@ def process_tempo_network(df: pd.DataFrame, team_name: str) -> Dict[str, Any]:
        'player_profiles': [ {name, ttrp, carry, drawn_to, role} ]
     }
     """
-    from utils.visuals import get_starting_xi
-    
-    top_11_players = get_starting_xi(df[df['team_name'] == team_name], 'player_name')
+    from utils.visuals import get_starting_xi, filter_position_events
+
+    team_df = filter_position_events(df[df['team_name'] == team_name])
+    top_11_players = get_starting_xi(team_df, 'player_name')
     
     chains = extract_possession_chains(df, team_name)
     

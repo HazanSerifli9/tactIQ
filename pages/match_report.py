@@ -2,6 +2,7 @@ import dash
 from dash import html, dcc, Input, Output, State, callback
 import dash_bootstrap_components as dbc
 from utils.data import get_match_dataframe, extract_fixture_data
+from utils.wyscout_loader import get_wyscout_match_stats
 import utils.visuals as visuals
 import utils.metrics as metrics
 import utils.ball_trace_visuals as bt_visuals
@@ -66,6 +67,20 @@ def layout(match_id=None):
         "BDP": metrics.calculate_bdp(df, away_team),
     }
 
+    # Wyscout xG & PPDA override (daha güvenilir kaynak)
+    try:
+        ws = get_wyscout_match_stats(home_team, away_team)
+        if ws['home']['xg'] is not None:
+            home_metrics['xG'] = ws['home']['xg']
+        if ws['away']['xg'] is not None:
+            away_metrics['xG'] = ws['away']['xg']
+        if ws['home']['ppda'] is not None:
+            home_metrics['PPDA'] = ws['home']['ppda']
+        if ws['away']['ppda'] is not None:
+            away_metrics['PPDA'] = ws['away']['ppda']
+    except Exception:
+        pass
+
     # SEPP & Buildup Integration
     h_sepp = metrics.calculate_sepp(df, home_team)
     a_sepp = metrics.calculate_sepp(df, away_team)
@@ -83,9 +98,19 @@ def layout(match_id=None):
             html.Div(question, style={"fontSize": "0.7rem", "color": "#888", "textTransform": "uppercase",
                                       "letterSpacing": "1px", "marginBottom": "10px"}),
             html.Div([
-                html.Span(f"{h_val}", style={"fontSize": "2.4rem", "fontWeight": "bold", "color": "#fbbf24"}),
-                html.Span(" — ", style={"color": "#444", "margin": "0 10px", "fontSize": "1.5rem"}),
-                html.Span(f"{a_val}", style={"fontSize": "2.4rem", "fontWeight": "bold", "color": "white"}),
+                html.Div([
+                    html.Div(clean_name(home_team), style={"fontSize": "0.62rem", "color": "#fbbf24",
+                                                           "textTransform": "uppercase", "letterSpacing": "0.5px",
+                                                           "marginBottom": "2px", "fontWeight": "600"}),
+                    html.Span(f"{h_val}", style={"fontSize": "2.4rem", "fontWeight": "bold", "color": "#fbbf24"}),
+                ], style={"textAlign": "center"}),
+                html.Span(" — ", style={"color": "#444", "margin": "0 10px", "fontSize": "1.5rem", "alignSelf": "center"}),
+                html.Div([
+                    html.Div(clean_name(away_team), style={"fontSize": "0.62rem", "color": "#e5e7eb",
+                                                           "textTransform": "uppercase", "letterSpacing": "0.5px",
+                                                           "marginBottom": "2px", "fontWeight": "600"}),
+                    html.Span(f"{a_val}", style={"fontSize": "2.4rem", "fontWeight": "bold", "color": "white"}),
+                ], style={"textAlign": "center"}),
             ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "margin": "8px 0"}),
             html.Div(metric_name, style={"fontSize": "0.85rem", "color": "#aaa", "fontWeight": "600"}),
             html.Div(note, style={"fontSize": "0.7rem", "color": "#666", "marginTop": "4px", "lineHeight": "1.4"}),
@@ -113,9 +138,15 @@ def layout(match_id=None):
 
     kpi_section = html.Div([
         html.P("3 things that decide this match", style={
-            "color": "#555", "textAlign": "center", "marginBottom": "20px",
+            "color": "#555", "textAlign": "center", "marginBottom": "10px",
             "fontSize": "0.8rem", "textTransform": "uppercase", "letterSpacing": "2px",
         }),
+        html.Div([
+            html.Span("●", style={"color": "#fbbf24", "marginRight": "4px"}),
+            html.Span(clean_name(home_team), style={"color": "#fbbf24", "fontSize": "0.75rem", "fontWeight": "600", "marginRight": "20px"}),
+            html.Span("●", style={"color": "#e5e7eb", "marginRight": "4px"}),
+            html.Span(clean_name(away_team), style={"color": "#e5e7eb", "fontSize": "0.75rem", "fontWeight": "600"}),
+        ], style={"textAlign": "center", "marginBottom": "20px"}),
         # ── 3 headline questions ──
         html.Div([
             create_headline_card(
@@ -242,7 +273,7 @@ def layout(match_id=None):
         plots[f"{team}_hybrid"]          = safe_plot(tempo_visuals.plot_hybrid_pass_network, df, team, t_data)
         plots[f"{team}_xt"]              = safe_plot(visuals.plot_xt_leaders, df, team)
         plots[f"{team}_startxi"]         = safe_plot(visuals.plot_starting_xi, df, team)
-        plots[f"{team}_defense"]         = safe_plot(visuals.plot_defensive_block, df, team)
+        plots[f"{team}_def_profile"]     = safe_plot(visuals.plot_defensive_profile, df, team)
         plots[f"{team}_bt_map"]          = safe_plot(bt_visuals.plot_ball_time_map,      bt_data, team)
         plots[f"{team}_bt_bars"]         = safe_plot(bt_visuals.plot_thirds_flanks_bars, bt_data, team)
         plots[f"{team}_bt_line"]         = safe_plot(bt_visuals.plot_ball_timeline,      bt_data, team)
@@ -257,15 +288,26 @@ def layout(match_id=None):
             if not profiles:
                 return html.Div("No tempo data available", style={"color": "#888"})
             rows = [html.Tr([
-                html.Th("Player",   style={"textAlign": "left",   "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
-                html.Th("TTRP",     style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
-                html.Th("Carry",    style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
-                html.Th("Drawn To", style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
-                html.Th("Role",     style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
+                html.Th("Player",         style={"textAlign": "left",   "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
+                html.Th("Release Time",   style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
+                html.Th("Avg Carry",      style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
+                html.Th("Connections",    style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
+                html.Th("Style",          style={"textAlign": "center", "padding": "10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
             ])]
-            role_colors = {"Metronome": "#3b82f6", "Direct": "#ef4444", "Recycler": "#a0aec0", "Connector": "#fbbf24"}
+            
+            coach_roles = {
+                "Metronome": "Playmaker",
+                "Direct": "Direct Passer",
+                "Recycler": "Safe Passer",
+                "Connector": "Link Player"
+            }
+            role_colors = {"Playmaker": "#3b82f6", "Direct Passer": "#ef4444", "Safe Passer": "#a0aec0", "Link Player": "#fbbf24"}
+            
             for p in profiles:
-                rc = role_colors.get(p.get("Role", ""), "#ffffff")
+                orig_role = p.get("Role", "")
+                coach_role = coach_roles.get(orig_role, orig_role)
+                rc = role_colors.get(coach_role, "#ffffff")
+                
                 j  = p.get("jersey_number")
                 display = f"#{int(j)}" if j is not None else p["Player"]
                 rows.append(html.Tr([
@@ -273,12 +315,13 @@ def layout(match_id=None):
                     html.Td(f"{p['TTRP']}s",      style={"textAlign": "center", "padding": "8px", "color": "#fbbf24"}),
                     html.Td(f"+{p['Carry']}m",    style={"textAlign": "center", "padding": "8px", "color": "#22c55e"}),
                     html.Td(p.get("Drawn To", ""),style={"textAlign": "center", "padding": "8px", "color": "#22c55e"}),
-                    html.Td(p.get("Role", ""),    style={"textAlign": "center", "padding": "8px", "color": rc}),
+                    html.Td(coach_role,           style={"textAlign": "center", "padding": "8px", "color": rc}),
                 ], style={"borderBottom": "1px solid rgba(255,255,255,0.05)"}))
+            
             ttrp = t_data.get("team_avg_ttrp", 0)
             conn = t_data.get("team_total_connections", 0)
             rows.append(html.Tr([
-                html.Td(f"Team Avg TTRP: {ttrp}s | {conn} connections", colSpan=5,
+                html.Td(f"Team Avg Release Time: {ttrp}s | {conn} strong connections", colSpan=5,
                         style={"textAlign": "center", "padding": "12px", "color": "#ef4444",
                                "fontWeight": "bold", "fontSize": "0.85rem",
                                "background": "rgba(239,68,68,0.05)"})
@@ -287,19 +330,23 @@ def layout(match_id=None):
 
         tactical_setup = html.Div([
             html.Div([
-                html.H3("Starting XI (In & Out of Possession)", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "10px"}),
-                html.Img(src=get_img(f'{team_name}_startxi'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"})
-            ], className="visualization-card", style={"marginBottom": "30px"}),
+                html.H3("Average Position Map", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "10px"}),
+                html.P("Overall average player positions. This represents the baseline shape of the team across the entire match.",
+                       style={"color": "#9ca3af", "fontSize": "0.8rem", "marginBottom": "12px"}),
+                html.Img(src=get_img(f'{team_name}_startxi'), className="plot-img", style={"width": "100%", "maxWidth": "500px", "display": "block", "margin": "0 auto", "borderRadius": "12px", "border": "1px solid var(--border-color)"})
+            ], className="visualization-card", style={"marginBottom": "30px", "textAlign": "center"}),
             html.Div([
-                html.H3("Defensive Block", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "10px"}),
-                html.Img(src=get_img(f'{team_name}_defense'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"})
+                html.H3("Defensive Profile", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "10px"}),
+                html.P("Block type, compactness, line height shift between halves, and action breakdown.",
+                       style={"color": "#9ca3af", "fontSize": "0.8rem", "marginBottom": "12px"}),
+                html.Img(src=get_img(f'{team_name}_def_profile'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"})
             ], className="visualization-card", style={"marginBottom": "30px"}),
         ], style={"padding": "20px 0"})
 
         possession_tempo = html.Div([
             html.Div([
-                html.H3("Pass · Tempo Network", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "4px"}),
-                html.P("Pass volume (edge width) + Tempo / speed of play (edge colour) + Carry events + Player roles — all in one view.",
+                html.H3("Pass & Tempo Network", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "4px"}),
+                html.P("Shows who dictates play (node size), passing combinations (line thickness), and speed of play (line color: Red = Fast, Blue = Slow).",
                        style={"color": "#9ca3af", "fontSize": "0.8rem", "marginBottom": "12px"}),
                 html.Img(src=get_img(f'{team_name}_hybrid'), className="plot-img",
                          style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"}),
@@ -307,7 +354,7 @@ def layout(match_id=None):
                     html.Div("PLAYER TEMPO PROFILES", style={"textAlign": "center", "fontWeight": "bold",
                                                               "marginBottom": "5px", "color": "#e5e7eb",
                                                               "marginTop": "18px"}),
-                    html.Div("Release speed, carry contribution & tactical role",
+                    html.Div("Average release time, carry distance & playing style",
                              style={"textAlign": "center", "fontSize": "0.8rem",
                                     "marginBottom": "10px", "color": "#a0aec0"}),
                     create_tempo_table(t_data.get("profiles", [])),
@@ -377,10 +424,18 @@ def layout(match_id=None):
     return html.Div([
         dcc.Store(id='current-match-id', data=decoded_match_id),
         html.Header([
-            html.Div("Match Deep Dive", style={"color": "var(--accent-color)", "fontWeight": "600", "textTransform": "uppercase", "letterSpacing": "2px"}),
-            html.H1(f"{clean_name(home_team)} vs {clean_name(away_team)}", style={"fontSize": "2.5rem", "marginBottom": "10px"}),
-            html.P("Advanced Tactical Visualizations & Pattern Analysis", style={"color": "var(--text-secondary)"}),
-            dcc.Link("← Back to Hub", href="/analysis", style={"color": "var(--text-secondary)", "marginTop": "20px", "display": "inline-block"})
+            html.Div("Match Deep Dive", style={"color": "var(--accent-color)", "fontWeight": "600", "textTransform": "uppercase", "letterSpacing": "2px", "marginBottom": "16px"}),
+            html.Div([
+                html.Span(clean_name(home_team), style={"fontSize": "2rem", "fontWeight": "700", "color": "white"}),
+                html.Div([
+                    html.Span(str(h_goals), style={"fontSize": "3rem", "fontWeight": "900", "color": "#fbbf24"}),
+                    html.Span(" — ", style={"fontSize": "2rem", "color": "#555", "margin": "0 8px"}),
+                    html.Span(str(a_goals), style={"fontSize": "3rem", "fontWeight": "900", "color": "white"}),
+                ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "margin": "0 28px"}),
+                html.Span(clean_name(away_team), style={"fontSize": "2rem", "fontWeight": "700", "color": "white"}),
+            ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "marginBottom": "12px", "flexWrap": "wrap", "gap": "8px"}),
+            html.P("Advanced Tactical Visualizations & Pattern Analysis", style={"color": "var(--text-secondary)", "marginBottom": "16px"}),
+            dcc.Link("← Back to Hub", href="/analysis", style={"color": "var(--text-secondary)", "display": "inline-block"})
         ], style={"textAlign": "center", "marginBottom": "40px"}),
 
         dbc.Tabs([

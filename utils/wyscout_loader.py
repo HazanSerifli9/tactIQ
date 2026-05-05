@@ -311,38 +311,106 @@ def load_wyscout_match_level() -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True)
 
 
+def get_wyscout_match_stats(home_team: str, away_team: str) -> dict:
+    """
+    Belirtilen iki takımın karşılaştığı maça ait Wyscout xG ve PPDA değerlerini döndürür.
+    Match sütunu "TeamA - TeamB score" formatındadır; her iki takım adı içinde aranır.
+
+    Returns:
+        {
+            'home': {'xg': float|None, 'ppda': float|None},
+            'away': {'xg': float|None, 'ppda': float|None},
+        }
+    """
+    name_map = get_wyscout_team_name_map()
+    h_ws = name_map.get(home_team, home_team)
+    a_ws = name_map.get(away_team, away_team)
+
+    result = {
+        'home': {'xg': None, 'ppda': None},
+        'away': {'xg': None, 'ppda': None},
+    }
+
+    def _find_match_row(team_ws: str, other_ws: str, col: str) -> float | None:
+        raw = _load_team_raw(team_ws)
+        if raw.empty or col not in raw.columns or 'Match' not in raw.columns:
+            return None
+        mask = (
+            raw['Match'].str.contains(h_ws, case=False, na=False) &
+            raw['Match'].str.contains(a_ws, case=False, na=False) &
+            (raw['Team'] == team_ws)
+        )
+        rows = raw[mask]
+        if rows.empty:
+            return None
+        val = rows.iloc[0][col]
+        return round(float(val), 2) if pd.notna(val) else None
+
+    result['home']['xg']   = _find_match_row(h_ws, a_ws, 'xg_for')
+    result['home']['ppda'] = _find_match_row(h_ws, a_ws, 'ppda')
+    result['away']['xg']   = _find_match_row(a_ws, h_ws, 'xg_for')
+    result['away']['ppda'] = _find_match_row(a_ws, h_ws, 'ppda')
+
+    logger.info(
+        "Wyscout match stats — %s: xG=%s PPDA=%s | %s: xG=%s PPDA=%s",
+        h_ws, result['home']['xg'], result['home']['ppda'],
+        a_ws, result['away']['xg'], result['away']['ppda'],
+    )
+    return result
+
+
 def get_wyscout_team_name_map() -> dict:
     """
     Event verisindeki takım adlarını Wyscout takım adlarıyla eşler.
     Returns: {event_team_name: wyscout_team_name}
     """
     return {
-        "Alanyaspor":              "Alanyaspor",
-        "Antalyaspor":             "Antalyaspor",
-        "Antalyaspor ":            "Antalyaspor",
-        "Beşiktaş":                "Beşiktaş",
-        "Eyüpspor":                "Eyüpspor",
-        "Eyup":                    "Eyüpspor",
-        "Fatih Karagümrük":        "Fatih Karagümrük",
-        "Fenerbahçe":              "Fenerbahçe",
-        "Galatasaray":             "Galatasaray",
-        "Gaziantep":               "Gaziantep",
-        "Gaziantep FK":            "Gaziantep",
-        "Gençlerbirliği":          "Gençlerbirliği",
-        "Göztepe":                 "Göztepe",
-        "Kasımpaşa":               "Kasımpaşa",
-        "Kayserispor":             "Kayserispor",
-        "Kayseri":                 "Kayserispor",
-        "Kocaelispor":             "Kocaelispor",
-        "Kocaeli":                 "Kocaelispor",
-        "Konyaspor":               "Konyaspor",
-        "Konya":                   "Konyaspor",
-        "Rizespor":                "Rizespor",
-        "Rize":                    "Rizespor",
-        "Samsunspor":              "Samsunspor",
-        "Samsun":                  "Samsunspor",
-        "Trabzonspor":             "Trabzonspor",
-        "İstanbul Başakşehir":     "İstanbul Başakşehir",
-        "Başakşehir":              "İstanbul Başakşehir",
-        "Istanbul Basaksehir":     "İstanbul Başakşehir",
+        # Wyscout kısa adları
+        "Alanyaspor":                          "Alanyaspor",
+        "Antalyaspor":                         "Antalyaspor",
+        "Antalyaspor ":                        "Antalyaspor",
+        "Beşiktaş":                            "Beşiktaş",
+        "Eyüpspor":                            "Eyüpspor",
+        "Eyup":                                "Eyüpspor",
+        "Fatih Karagümrük":                    "Fatih Karagümrük",
+        "Fenerbahçe":                          "Fenerbahçe",
+        "Galatasaray":                         "Galatasaray",
+        "Gaziantep":                           "Gaziantep",
+        "Gaziantep FK":                        "Gaziantep",
+        "Gençlerbirliği":                      "Gençlerbirliği",
+        "Göztepe":                             "Göztepe",
+        "Kasımpaşa":                           "Kasımpaşa",
+        "Kayserispor":                         "Kayserispor",
+        "Kayseri":                             "Kayserispor",
+        "Kocaelispor":                         "Kocaelispor",
+        "Kocaeli":                             "Kocaelispor",
+        "Konyaspor":                           "Konyaspor",
+        "Konya":                               "Konyaspor",
+        "Rizespor":                            "Rizespor",
+        "Rize":                                "Rizespor",
+        "Samsunspor":                          "Samsunspor",
+        "Samsun":                              "Samsunspor",
+        "Trabzonspor":                         "Trabzonspor",
+        "İstanbul Başakşehir":                 "İstanbul Başakşehir",
+        "Başakşehir":                          "İstanbul Başakşehir",
+        "Istanbul Basaksehir":                 "İstanbul Başakşehir",
+        # Opta/event data tam adları
+        "Alanyaspor Kulübü":                   "Alanyaspor",
+        "Antalyaspor Kulübü":                  "Antalyaspor",
+        "Beşiktaş Jimnastik Kulübü":           "Beşiktaş",
+        "Eyüp Spor Kulübü":                    "Eyüpspor",
+        "Fatih Karagümrük Spor Kulübü":        "Fatih Karagümrük",
+        "Fenerbahçe Spor Kulübü":              "Fenerbahçe",
+        "Galatasaray Spor Kulübü":             "Galatasaray",
+        "Gaziantep Futbol Kulübü":             "Gaziantep",
+        "Gençlerbirliği Spor Kulübü":          "Gençlerbirliği",
+        "Göztepe Spor Kulübü":                 "Göztepe",
+        "Kasımpaşa Spor Kulübü":               "Kasımpaşa",
+        "Kayseri Spor Kulübü":                 "Kayserispor",
+        "Kocaelispor Kulübü":                  "Kocaelispor",
+        "Konyaspor Kulübü":                    "Konyaspor",
+        "Samsunspor Kulübü":                   "Samsunspor",
+        "Trabzonspor Kulübü":                  "Trabzonspor",
+        "Çaykur Rize Spor Kulübü":             "Rizespor",
+        "İstanbul Başakşehir Futbol Kulübü":   "İstanbul Başakşehir",
     }

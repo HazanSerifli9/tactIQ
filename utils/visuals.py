@@ -71,16 +71,16 @@ def plot_convex_hulls(df, team_name):
     fig, ax = plt.subplots(figsize=(8, 6))
     fig.patch.set_facecolor(TACTIQ_BG)
     setup_pitch(ax, f"{team_name} - Player Territories")
-    
-    team_df = df[df['team_name'] == team_name]
-    
+
+    team_df = filter_position_events(df[df['team_name'] == team_name].dropna(subset=['player_name', 'x', 'y']))
+
     # Filter for starters or top players to avoid clutter
     top_players = get_starting_xi(team_df, 'player_name')
-    
+
     colors = plt.cm.get_cmap('tab20', len(top_players))
-    
+
     for i, player in enumerate(top_players):
-        player_df = team_df[(team_df['player_name'] == player) & (team_df['x'].notna()) & (team_df['y'].notna())]
+        player_df = team_df[team_df['player_name'] == player]
         points = player_df[['x', 'y']].values
         if len(points) > 2:
             try:
@@ -102,6 +102,35 @@ def plot_convex_hulls(df, team_name):
                 
     return fig_to_base64(fig)
 
+# type_id'ler: sahada gerçek konum içermeyen, ortalama pozisyonu bozan event'ler
+_NON_POSITIONAL_TYPE_IDS = {
+    5,   # Out
+    17,  # Card
+    18,  # Player Off
+    19,  # Player On
+    27,  # Start delay
+    28,  # End delay
+    30,  # End (period)
+    32,  # Start (period)
+    34,  # Team setup
+    40,  # Formation change
+    43,  # Deleted event
+}
+
+def filter_position_events(df):
+    """Sahada gerçek konum bilgisi taşıyan eventleri döndürür.
+    Out eventlerinin saha dışı koordinatlarını (x>100, x<0 vb.) ve
+    (0,0) konumuna düşen sahaya özgü olmayan eventleri filtreler.
+    """
+    mask = (
+        df['x'].between(0, 100, inclusive='both') &
+        df['y'].between(0, 100, inclusive='both')
+    )
+    if 'type_id' in df.columns:
+        mask &= ~df['type_id'].isin(_NON_POSITIONAL_TYPE_IDS)
+    return df[mask]
+
+
 def get_starting_xi(team_df, name_col='player_name'):
     """Helper to reliably get the top 11 players, ensuring GK is included."""
     if team_df.empty:
@@ -109,16 +138,16 @@ def get_starting_xi(team_df, name_col='player_name'):
     df_valid = team_df.dropna(subset=[name_col])
     if df_valid.empty:
         return []
-        
+
     counts = df_valid[name_col].value_counts()
-    
+
     if 'position' in df_valid.columns:
         gk_df = df_valid[df_valid['position'] == 'GK']
         if not gk_df.empty:
             gk_name = gk_df[name_col].value_counts().index[0]
             outfielders = [p for p in counts.index if p != gk_name]
             return [gk_name] + outfielders[:10]
-            
+
     # Fallback to just top 11 by actions
     return counts.head(11).index.tolist()
 
@@ -420,26 +449,28 @@ def get_shorter_name(full_name):
 def preprocess_for_network(df):
     """Refactors the user's preprocessing logic."""
     df = df.copy()
-    
+
     # Ensure necessary columns
     if 'Pass End X' not in df.columns:
         df['Pass End X'] = np.nan
     if 'Pass End Y' not in df.columns:
         df['Pass End Y'] = np.nan
-        
+
     df['end_x'] = pd.to_numeric(df['Pass End X'], errors='coerce').fillna(0)
     df['end_y'] = pd.to_numeric(df['Pass End Y'], errors='coerce').fillna(0)
-    
+
     df['shortName'] = df['player_name'].apply(get_short_name)
     df['shorter name'] = df['player_name'].apply(get_shorter_name)
-    
+
+    # Saha dışı / pozisyonsuz eventleri filtrele
+    df = filter_position_events(df)
+
     # Rescale to StatsBomb (120x80) from assumed Opta (100x100)
-    # Note: If data is already StatsBomb, this might distort it, but we follow user instruction
     df['x_scaled'] = df['x'] * 1.2
     df['y_scaled'] = df['y'] * 0.8
     df['end_x_scaled'] = df['end_x'] * 1.2
     df['end_y_scaled'] = df['end_y'] * 0.8
-    
+
     return df
 
 def get_passes_between_df(team_name, passes_df):
@@ -683,6 +714,290 @@ def plot_defensive_block(df, team_name):
     
     return fig_to_base64(fig)
 
+
+def plot_defensive_profile(df, team_name):
+    """
+    Comprehensive defensive profile — distinct from Out-of-Possession avg positions.
+    Shows: block classification, compactness ellipse, 1H vs 2H shift, action breakdown.
+    """
+    from matplotlib.patches import Ellipse
+
+    df_processed = preprocess_for_network(df)
+
+    def_types = ['BallRecovery', 'BlockedPass', 'Challenge', 'Clearance', 'Error',
+                 'Foul', 'Interception', 'Tackle']
+
+    if 'event' in df_processed.columns:
+        mask = (df_processed['team_name'] == team_name) & (
+            ((df_processed['event'] == 'Aerial') & (df_processed['x'] <= 80)) |
+            (df_processed['event'].isin(def_types))
+        )
+    else:
+        mask = (df_processed['team_name'] == team_name) & (df_processed['x'] < 60)
+
+    defensive_df = df_processed[mask].copy()
+
+    if defensive_df.empty:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        fig.patch.set_facecolor(TACTIQ_BG)
+        ax.set_facecolor(TACTIQ_BG)
+        ax.text(0.5, 0.5, "No Defensive Data", color=TACTIQ_FG, ha="center")
+        ax.axis('off')
+        return fig_to_base64(fig)
+
+    # Top 11 players
+    team_all_df = df_processed[df_processed['team_name'] == team_name]
+    top_11 = get_starting_xi(team_all_df, 'shortName')
+    defensive_df = defensive_df[defensive_df['shortName'].isin(top_11)]
+
+    if defensive_df.empty:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        fig.patch.set_facecolor(TACTIQ_BG)
+        ax.set_facecolor(TACTIQ_BG)
+        ax.text(0.5, 0.5, "No Defensive Data for Starting XI", color=TACTIQ_FG, ha="center")
+        ax.axis('off')
+        return fig_to_base64(fig)
+
+    # Per-player average defensive positions
+    avg_locs = defensive_df.groupby('shortName').agg(
+        x=('x_scaled', 'median'),
+        y=('y_scaled', 'median'),
+        count=('x_scaled', 'count')
+    ).reset_index()
+
+    # --- Block Metrics ---
+    avg_line = avg_locs['x'].mean()                                    # StatsBomb 0-120
+
+    # Compactness: exclude GK (lowest x position) for realistic spread
+    outfield_locs = avg_locs.nlargest(len(avg_locs) - 1, 'x') if len(avg_locs) > 1 else avg_locs
+    vertical_compact = outfield_locs['x'].max() - outfield_locs['x'].min()
+    horizontal_compact = outfield_locs['y'].max() - outfield_locs['y'].min()
+
+    # Convert to real meters (SB 120→105m, 80→68m)
+    vert_meters  = vertical_compact * (105 / 120)
+    horiz_meters = horizontal_compact * (68 / 80)
+    line_meters  = avg_line * (105 / 120)
+
+    # Block classification
+    if avg_line > 66:        # > 55% of pitch
+        block_type, block_color = "HIGH BLOCK", "#ef4444"
+    elif avg_line > 48:      # 40-55%
+        block_type, block_color = "MID BLOCK", "#fbbf24"
+    else:
+        block_type, block_color = "LOW BLOCK", "#3b82f6"
+
+    # --- 1H vs 2H split ---
+    if 'expanded_minute' in defensive_df.columns:
+        h1_df = defensive_df[defensive_df['expanded_minute'] < 45]
+        h2_df = defensive_df[defensive_df['expanded_minute'] >= 45]
+    elif 'time_min' in defensive_df.columns:
+        # period_id based split
+        if 'period_id' in defensive_df.columns:
+            h1_df = defensive_df[defensive_df['period_id'] == 1]
+            h2_df = defensive_df[defensive_df['period_id'] == 2]
+        else:
+            h1_df = defensive_df[defensive_df['time_min'] < 45]
+            h2_df = defensive_df[defensive_df['time_min'] >= 45]
+    else:
+        half = len(defensive_df) // 2
+        h1_df = defensive_df.iloc[:half]
+        h2_df = defensive_df.iloc[half:]
+
+    h1_line = h1_df['x_scaled'].median() if not h1_df.empty else avg_line
+    h2_line = h2_df['x_scaled'].median() if not h2_df.empty else avg_line
+    h1_meters = h1_line * (105 / 120)
+    h2_meters = h2_line * (105 / 120)
+
+    # --- Recovery vs Pressure split ---
+    recovery_types = ['BallRecovery', 'Interception']
+    challenge_types = ['Tackle', 'Challenge', 'Foul', 'Aerial']
+
+    if 'event' in defensive_df.columns:
+        recoveries = defensive_df[defensive_df['event'].isin(recovery_types)]
+        challenges = defensive_df[defensive_df['event'].isin(challenge_types)]
+    else:
+        recoveries = defensive_df.iloc[:0]
+        challenges = defensive_df.iloc[:0]
+
+    # ===================== CREATE FIGURE =====================
+    fig = plt.figure(figsize=(18, 10))
+    fig.patch.set_facecolor(TACTIQ_BG)
+
+    # Grid: pitch (65%) + info panel (35%)
+    gs = fig.add_gridspec(1, 2, width_ratios=[2.2, 1], wspace=0.04)
+
+    # ---------- LEFT: Defensive Block Pitch ----------
+    ax_pitch = fig.add_subplot(gs[0])
+    pitch = Pitch(pitch_type='statsbomb', pitch_color=TACTIQ_BG,
+                  line_color=TACTIQ_FG, linewidth=2, line_zorder=2, corner_arcs=True)
+    pitch.draw(ax=ax_pitch)
+
+    # KDE heatmap (tinted with block color)
+    flamingo_cmap = LinearSegmentedColormap.from_list(
+        "DefProfile", [TACTIQ_BG, block_color], N=500)
+    try:
+        pitch.kdeplot(defensive_df.x_scaled, defensive_df.y_scaled,
+                      ax=ax_pitch, fill=True, levels=100, thresh=0.02,
+                      cut=4, cmap=flamingo_cmap)
+    except Exception:
+        pass
+
+    # Scatter all defensive actions (tiny markers)
+    pitch.scatter(defensive_df.x_scaled, defensive_df.y_scaled,
+                  s=10, marker='x', color='yellow', alpha=0.15, ax=ax_pitch)
+
+    # Defensive line (average)
+    ax_pitch.axvline(x=avg_line, color='white', linestyle='-', alpha=0.7, linewidth=2.5)
+    ax_pitch.text(avg_line + 1.5, 83, f"AVG {line_meters:.0f}m",
+                  fontsize=13, color='white', ha='left', fontweight='bold',
+                  bbox=dict(facecolor=TACTIQ_BG, alpha=0.8, edgecolor='none',
+                            boxstyle='round,pad=0.3'))
+
+    # 1H / 2H lines
+    ax_pitch.axvline(x=h1_line, color='#22c55e', linestyle=':', alpha=0.6, linewidth=2)
+    ax_pitch.axvline(x=h2_line, color='#f97316', linestyle=':', alpha=0.6, linewidth=2)
+
+    # Half legend at bottom
+    ax_pitch.text(h1_line, -3, "1H", fontsize=10, color='#22c55e',
+                  ha='center', fontweight='bold')
+    ax_pitch.text(h2_line, -3, "2H", fontsize=10, color='#f97316',
+                  ha='center', fontweight='bold')
+
+    ax_pitch.set_title(f"{team_name} — Defensive Profile",
+                       color=TACTIQ_FG, size=18, fontweight='bold', pad=12)
+
+    # ---------- RIGHT: Metrics Panel ----------
+    ax_info = fig.add_subplot(gs[1])
+    ax_info.set_facecolor(TACTIQ_BG)
+    ax_info.axis('off')
+    ax_info.set_xlim(0, 1)
+    ax_info.set_ylim(0, 1)
+
+    # -- Block type badge --
+    ax_info.text(0.5, 0.94, block_type, fontsize=24, fontweight='900',
+                 color=block_color, ha='center', va='center',
+                 bbox=dict(boxstyle='round,pad=0.6', facecolor=TACTIQ_BG,
+                           edgecolor=block_color, linewidth=3))
+
+    # -- Compactness section --
+    ax_info.text(0.5, 0.83, "C O M P A C T N E S S", fontsize=9,
+                 color='#777', ha='center', fontweight='bold')
+
+    ax_info.plot([0.15, 0.85], [0.815, 0.815], color='#444', linewidth=0.5)
+
+    ax_info.text(0.5, 0.77, f"↕  {vert_meters:.1f}m", fontsize=18,
+                 color='white', ha='center', fontweight='bold')
+    ax_info.text(0.5, 0.75, "vertical spread (GK → highest)", fontsize=8,
+                 color='#888', ha='center')
+
+    ax_info.text(0.5, 0.69, f"↔  {horiz_meters:.1f}m", fontsize=18,
+                 color='white', ha='center', fontweight='bold')
+    ax_info.text(0.5, 0.67, "horizontal spread (L → R)", fontsize=8,
+                 color='#888', ha='center')
+
+    # Compactness rating
+    # Smaller spread = more compact. Typical compact block: vert < 30m, horiz < 35m
+    compact_score = max(0, min(100, 100 - ((vert_meters + horiz_meters) / 2 - 15) * 2))
+    if compact_score >= 70:
+        compact_label, compact_clr = "Compact", "#22c55e"
+    elif compact_score >= 40:
+        compact_label, compact_clr = "Moderate", "#fbbf24"
+    else:
+        compact_label, compact_clr = "Stretched", "#ef4444"
+
+    ax_info.text(0.5, 0.61, compact_label, fontsize=14,
+                 color=compact_clr, ha='center', fontweight='bold')
+
+    # -- Line Height by Half section --
+    ax_info.text(0.5, 0.52, "L I N E   H E I G H T", fontsize=9,
+                 color='#777', ha='center', fontweight='bold')
+    ax_info.plot([0.15, 0.85], [0.505, 0.505], color='#444', linewidth=0.5)
+
+    ax_info.text(0.25, 0.46, "1st Half", fontsize=11,
+                 color='#22c55e', ha='center', fontweight='600')
+    ax_info.text(0.25, 0.42, f"{h1_meters:.0f}m", fontsize=22,
+                 color='#22c55e', ha='center', fontweight='bold')
+
+    ax_info.text(0.75, 0.46, "2nd Half", fontsize=11,
+                 color='#f97316', ha='center', fontweight='600')
+    ax_info.text(0.75, 0.42, f"{h2_meters:.0f}m", fontsize=22,
+                 color='#f97316', ha='center', fontweight='bold')
+
+    # Shift arrow
+    diff_m = h2_meters - h1_meters
+    if abs(diff_m) > 0.5:
+        arrow = "▲" if diff_m > 0 else "▼"
+        shift_text = f"{arrow} {abs(diff_m):.1f}m {'pushed up' if diff_m > 0 else 'dropped back'}"
+        shift_clr = '#22c55e' if diff_m > 0 else '#ef4444'
+    else:
+        shift_text = "≈ Stable"
+        shift_clr = '#aaa'
+
+    ax_info.text(0.5, 0.36, shift_text, fontsize=12,
+                 color=shift_clr, ha='center', fontweight='bold')
+
+    # -- Action Breakdown section --
+    ax_info.text(0.5, 0.27, "A C T I O N S", fontsize=9,
+                 color='#777', ha='center', fontweight='bold')
+    ax_info.plot([0.15, 0.85], [0.255, 0.255], color='#444', linewidth=0.5)
+
+    total_actions = len(defensive_df)
+    n_recoveries = len(recoveries)
+    n_challenges = len(challenges)
+
+    ax_info.text(0.5, 0.21, f"{total_actions}", fontsize=28,
+                 color='white', ha='center', fontweight='bold')
+    ax_info.text(0.5, 0.18, "total defensive actions", fontsize=8,
+                 color='#888', ha='center')
+
+    # Mini bar for recovery vs challenge ratio
+    if total_actions > 0:
+        rec_pct = n_recoveries / total_actions
+        chall_pct = n_challenges / total_actions
+
+        bar_y = 0.13
+        bar_h = 0.02
+        bar_l = 0.12
+        bar_w = 0.76
+
+        # Background bar
+        ax_info.add_patch(patches.FancyBboxPatch(
+            (bar_l, bar_y), bar_w, bar_h,
+            boxstyle='round,pad=0.003', facecolor='#1a1a1a',
+            edgecolor='none'))
+
+        # Recovery portion (green)
+        if rec_pct > 0:
+            ax_info.add_patch(patches.FancyBboxPatch(
+                (bar_l, bar_y), bar_w * rec_pct, bar_h,
+                boxstyle='round,pad=0.003', facecolor='#22c55e',
+                edgecolor='none', alpha=0.8))
+
+        # Challenge portion (orange) — starts after recoveries
+        if chall_pct > 0:
+            ax_info.add_patch(patches.FancyBboxPatch(
+                (bar_l + bar_w * rec_pct, bar_y), bar_w * chall_pct, bar_h,
+                boxstyle='round,pad=0.003', facecolor='#f97316',
+                edgecolor='none', alpha=0.8))
+
+        ax_info.text(0.2, 0.09, f"Recoveries {n_recoveries}", fontsize=9,
+                     color='#22c55e', ha='center')
+        ax_info.text(0.5, 0.09, f"Challenges {n_challenges}", fontsize=9,
+                     color='#f97316', ha='center')
+        other = total_actions - n_recoveries - n_challenges
+        ax_info.text(0.8, 0.09, f"Other {other}", fontsize=9,
+                     color='#aaa', ha='center')
+
+    # 1H / 2H action counts
+    h1_count = len(h1_df)
+    h2_count = len(h2_df)
+    ax_info.text(0.5, 0.04, f"1H: {h1_count}   •   2H: {h2_count}",
+                 fontsize=10, color='#666', ha='center')
+
+    plt.tight_layout()
+    return fig_to_base64(fig)
+
+
 def plot_progressive_pass_map(df, team_name):
     from mplsoccer import Pitch as MplPitch
     df = preprocess_for_network(df)
@@ -830,248 +1145,309 @@ def plot_progressive_pass_map(df, team_name):
 from highlight_text import ax_text
 
 def plot_match_shot_map(df, home_team, away_team):
-    # Preprocess (Standardize Coords to StatsBomb 120x80)
-    # We will use 'x' and 'y' columns directly but assume they need scaling if not statsbomb
-    # Helper preprocess_for_network creates x_scaled, y_scaled.
-    df = preprocess_for_network(df)
-    
-    # Filter shots
-    # Opta Event Types often: Miss, Goal, Attempt Saved, Post
-    # We need to map or use existing columns
-    
-    shot_types = ['Goal', 'Miss', 'Attempt Saved', 'Post', 'Saved Shot']
-    
-    if 'event' in df.columns:
-         mask = (df['event'].isin(shot_types))
-         Shotsdf = df[mask].copy()
-         # Normalize typeId column for user code compatibility
-         Shotsdf['typeId'] = Shotsdf['event']
-    elif 'type_id' in df.columns:
-         # Need mapping if using type_id. 
-         # Assuming user provided 'typeId' column exists in their DF or was mapped.
-         # If raw opta, usually need mapping.
-         # Let's assume 'typeId' or 'event' exists as per user snippet.
-         if 'typeId' in df.columns:
-             mask = (df['typeId'].isin(shot_types))
-             Shotsdf = df[mask].copy()
-         else:
-             # Fallback: Filter by event_id ranges commonly used for shots if known, or fail
-             Shotsdf = pd.DataFrame()
-    else:
-         Shotsdf = pd.DataFrame()
+    from matplotlib import gridspec
 
-    if Shotsdf.empty and 'event' not in df.columns and 'typeId' not in df.columns:
-        # Try to find any column resembling event type
-        pass
-        
+    df = preprocess_for_network(df)
+    shot_types = ['Goal', 'Miss', 'Attempt Saved', 'Post', 'Saved Shot']
+
+    if 'event' in df.columns:
+        Shotsdf = df[df['event'].isin(shot_types)].copy()
+        Shotsdf['typeId'] = Shotsdf['event']
+    else:
+        Shotsdf = pd.DataFrame()
+
     if Shotsdf.empty:
-         fig, ax = plt.subplots(figsize=(8, 6))
-         fig.patch.set_facecolor(TACTIQ_BG)
-         ax.text(0.5, 0.5, "No Shot Data Found", color=TACTIQ_FG, ha="center")
-         return fig_to_base64(fig)
-         
-    # Ensure qualifiers for OwnGoal check
-    if 'qualifiers' not in Shotsdf.columns:
-        Shotsdf['qualifiers'] = ''
-        
-    # Teams
+        fig, ax = plt.subplots(figsize=(8, 6))
+        fig.patch.set_facecolor(TACTIQ_BG)
+        ax.text(0.5, 0.5, "No Shot Data Found", color=TACTIQ_FG, ha="center", transform=ax.transAxes)
+        return fig_to_base64(fig)
+
     hShotsdf = Shotsdf[Shotsdf['team_name'] == home_team].copy()
     aShotsdf = Shotsdf[Shotsdf['team_name'] == away_team].copy()
-    
-    # Calc Stats
+
+    xg_col = next((c for c in ['xG', 'expectedGoals', 'xg'] if c in Shotsdf.columns), None)
+
+    def get_xg(row):
+        if xg_col and pd.notna(row.get(xg_col)):
+            return float(row[xg_col])
+        return 0.05
+
     hgoal_count = len(hShotsdf[hShotsdf['typeId'] == 'Goal'])
     agoal_count = len(aShotsdf[aShotsdf['typeId'] == 'Goal'])
-    
-    # Check for xG column
-    xg_col = next((c for c in ['xG', 'expectedGoals', 'xg'] if c in Shotsdf.columns), None)
-    
-    if xg_col:
-        hxg = round(hShotsdf[xg_col].fillna(0).sum(), 2)
-        axg = round(aShotsdf[xg_col].fillna(0).sum(), 2)
-    else:
-        hxg = 0
-        axg = 0
-        
-    # xGOT (Expected Goals on Target) - usually different model, or same if goal?
-    # User had hxgot. If not present, use 0
-    xgot_col = next((c for c in ['xGOT', 'expectedGoalsOnTarget'] if c in Shotsdf.columns), None)
-    if xgot_col:
-        hxgot = round(hShotsdf[xgot_col].fillna(0).sum(), 2)
-        axgot = round(aShotsdf[xgot_col].fillna(0).sum(), 2)
-    else:
-         # Fallback: xGOT often approx xG for goals? or 0
-         hxgot = 0 # Placeholder
-         axgot = 0
-         
-    # Shot Counts
+    hxg = round(hShotsdf[xg_col].fillna(0).sum(), 2) if xg_col else 0
+    axg = round(aShotsdf[xg_col].fillna(0).sum(), 2) if xg_col else 0
     hTotalShots = len(hShotsdf)
     aTotalShots = len(aShotsdf)
-    
-    hSavedf = hShotsdf[hShotsdf['typeId'].isin(['Attempt Saved', 'Saved Shot'])]
-    aSavedf = aShotsdf[aShotsdf['typeId'].isin(['Attempt Saved', 'Saved Shot'])]
-    
-    hShotsOnT = len(hSavedf) + hgoal_count
-    aShotsOnT = len(aSavedf) + agoal_count
-    
-    hxGpSh = round(hxg/hTotalShots, 2) if hTotalShots > 0 else 0
-    axGpSh = round(axg/aTotalShots, 2) if aTotalShots > 0 else 0
-    
-    # Distances
-    # User used 120,40 as center goal point. 
-    # For Home: Attacks to Right? Or Left? 
-    # In 'plot_shotmap', user plots home shots at (120-x), (80-y). This implies Home attacks LEFT (towards 0)? 
-    # Or attacks RIGHT but plotted mirrored?
-    # StatsBomb: Attacking team always attacks Left->Right (0->120).
-    # If plotting Home on left side of pitch image and Away on right...
-    # User code:
-    # sc1 = pitch.scatter((120-hGoalData.x), (80-hGoalData.y), ...) -> Inverting Home coords.
-    # sc5 = pitch.scatter(aGoalData.x, aGoalData.y, ...) -> Keeping Away coords.
-    # This implies plotting Home shots on the LEFT side of the visual (0-60 area) and Away on RIGHT (60-120)? 
-    # BUT if SB coords are 0->120, 120 is the goal line.
-    # Inverting (120-x) puts shots near 120 back to near 0.
-    # So Home shots (near 120) are moved to near 0 (Left Goal).
-    # Away shots (near 120) are kept near 120 (Right Goal).
-    # This creates a "Home attacks Left Goal, Away attacks Right Goal" visual.
-    
-    # Distance Calc:
-    # User: sqrt((x-120)^2 + (y-40)^2) -> Distance to Right Goal (120,40).
-    # Assuming 'x' and 'y' are attacking direction (towards 120).
-    # Note: 'x_scaled', 'y_scaled' are standard SB.
-    
+    hShotsOnT = len(hShotsdf[hShotsdf['typeId'].isin(['Attempt Saved', 'Saved Shot', 'Goal'])])
+    aShotsOnT = len(aShotsdf[aShotsdf['typeId'].isin(['Attempt Saved', 'Saved Shot', 'Goal'])])
+
     hShotsdf['dist'] = np.sqrt((hShotsdf['x_scaled'] - 120)**2 + (hShotsdf['y_scaled'] - 40)**2)
     aShotsdf['dist'] = np.sqrt((aShotsdf['x_scaled'] - 120)**2 + (aShotsdf['y_scaled'] - 40)**2)
-    
-    home_average_shot_distance = round(hShotsdf['dist'].mean(), 2) if not hShotsdf.empty else 0
-    away_average_shot_distance = round(aShotsdf['dist'].mean(), 2) if not aShotsdf.empty else 0
-    
-    # Plotting
-    fig, ax = plt.subplots(figsize=(14, 10)) # Needs to be wide for stats bar
+    home_avg_dist = round(hShotsdf['dist'].mean(), 1) if not hShotsdf.empty else 0
+    away_avg_dist = round(aShotsdf['dist'].mean(), 1) if not aShotsdf.empty else 0
+
+    hcol = TACTIQ_HOME
+    acol = TACTIQ_AWAY
+
+    # ── Visual encoding (used consistently on pitch, goal mouth, timeline) ──
+    # filled + team-col  = on target (saved)
+    # filled + gold      = goal
+    # hollow + orange    = post
+    # hollow + team-col  = miss
+    # extra outer ring   = big chance (any type)
+    def shot_size(xg_val, typeId):
+        base = 200 if typeId in ('Goal', 'Attempt Saved', 'Saved Shot') else 100
+        return max(base, min(800, xg_val * 1400 + base))
+
+    # ── Figure layout ──────────────────────────────────────────
+    fig = plt.figure(figsize=(16, 11))
     fig.patch.set_facecolor(TACTIQ_BG)
-    
-    pitch = Pitch(pitch_type='statsbomb', corner_arcs=True, pitch_color=TACTIQ_BG, linewidth=2, line_color=TACTIQ_FG)
-    pitch.draw(ax=ax)
-    
-    ax.set_ylim(-0.5, 80.5)
-    ax.set_xlim(-0.5, 120.5)
-    
-    # Colors
-    hcol = TACTIQ_HOME # Home Red
-    acol = TACTIQ_AWAY # Away Blue
-    
-    # Home Shots (Inverted to Left)
-    # Using 'x_scaled'
-    
+
+    gs_outer = gridspec.GridSpec(2, 1, figure=fig, height_ratios=[5, 1], hspace=0.14)
+    gs_top   = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs_outer[0],
+                                                width_ratios=[2.4, 1], wspace=0.10)
+    gs_goals = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=gs_top[1], hspace=0.38)
+
+    ax_pitch     = fig.add_subplot(gs_top[0])
+    ax_home_goal = fig.add_subplot(gs_goals[0])
+    ax_away_goal = fig.add_subplot(gs_goals[1])
+    ax_timeline  = fig.add_subplot(gs_outer[1])
+
+    # ── Main pitch ──────────────────────────────────────────────
+    pitch = Pitch(pitch_type='statsbomb', corner_arcs=True,
+                  pitch_color=TACTIQ_BG, linewidth=1.5, line_color='#555')
+    pitch.draw(ax=ax_pitch)
+    ax_pitch.set_ylim(-0.5, 80.5)
+    ax_pitch.set_xlim(-0.5, 120.5)
+
+    def _plot_shot(ax_p, x_plot, y_plot, typeId, xg_val, team_col, minute, is_big_chance):
+        s = shot_size(xg_val, typeId)
+
+        # Big chance: single bold outer ring (drawn first, stays behind)
+        if is_big_chance:
+            ax_p.scatter(x_plot, y_plot, s=s * 3.2, color='none',
+                         edgecolors='#facc15', linewidths=1.8, zorder=2, alpha=0.55)
+
+        if typeId == 'Goal':
+            # Soft glow then filled gold circle
+            ax_p.scatter(x_plot, y_plot, s=s * 2.0, color='#fbbf24',
+                         edgecolors='none', zorder=3, alpha=0.18)
+            ax_p.scatter(x_plot, y_plot, s=s, color='#fbbf24',
+                         edgecolors='white', linewidths=1.8, zorder=5)
+        elif typeId in ('Attempt Saved', 'Saved Shot'):
+            # Filled team-color circle
+            ax_p.scatter(x_plot, y_plot, s=s, color=team_col,
+                         edgecolors='white', linewidths=1.2, zorder=4, alpha=0.85)
+        elif typeId == 'Post':
+            # Hollow orange diamond
+            ax_p.scatter(x_plot, y_plot, s=s, marker='D', color='none',
+                         edgecolors='#f97316', linewidths=2.2, zorder=4)
+        else:  # Miss — small hollow circle, transparent
+            ax_p.scatter(x_plot, y_plot, s=max(60, s * 0.45), color='none',
+                         edgecolors=team_col, linewidths=1.2, zorder=3, alpha=0.4)
+
+        # Minute label — small text above the marker
+        if pd.notna(minute):
+            r = np.sqrt(s) * 0.030 + 1.0
+            col_txt = '#fbbf24' if typeId == 'Goal' else (
+                      '#f97316' if typeId == 'Post' else team_col)
+            ax_p.text(x_plot, y_plot + r + 0.8, f"{int(minute)}'",
+                      color=col_txt, fontsize=5.5, ha='center', va='bottom',
+                      zorder=7, fontweight='bold')
+
     for _, shot in hShotsdf.iterrows():
-        x_plot = 120 - shot['x_scaled']
-        y_plot = 80 - shot['y_scaled']
-        
-        s = 200 # Size
-        if shot['typeId'] == 'Goal':
-            pitch.scatter(x_plot, y_plot, s=350, edgecolors='green', linewidths=0.6, c='None', marker='football', zorder=3, ax=ax)
-        elif shot['typeId'] in ('Attempt Saved', 'Saved Shot'):
-            pitch.scatter(x_plot, y_plot, s=s, edgecolors=hcol, c='None', hatch='///////', marker='o', ax=ax)
-        elif shot['typeId'] == 'Post':
-            pitch.scatter(x_plot, y_plot, s=s, edgecolors=hcol, c=hcol, marker='o', ax=ax)
-        else: # Miss
-             pitch.scatter(x_plot, y_plot, s=s, edgecolors=hcol, c='None', marker='o', ax=ax)
+        _plot_shot(ax_pitch, 120 - shot['x_scaled'], 80 - shot['y_scaled'],
+                   shot['typeId'], get_xg(shot), hcol,
+                   shot.get('time_min'), str(shot.get('Big Chance', '')).lower() in ('si', 'yes', '1'))
 
-    # Away Shots (Right)
     for _, shot in aShotsdf.iterrows():
-        x_plot = shot['x_scaled']
-        y_plot = shot['y_scaled']
-        
-        s = 200
-        if shot['typeId'] == 'Goal':
-            pitch.scatter(x_plot, y_plot, s=350, edgecolors='green', linewidths=0.6, c='None', marker='football', zorder=3, ax=ax)
-        elif shot['typeId'] in ('Attempt Saved', 'Saved Shot'):
-            pitch.scatter(x_plot, y_plot, s=s, edgecolors=acol, c='None', hatch='///////', marker='o', ax=ax)
-        elif shot['typeId'] == 'Post':
-             pitch.scatter(x_plot, y_plot, s=s, edgecolors=acol, c=acol, marker='o', ax=ax)
-        else:
-             pitch.scatter(x_plot, y_plot, s=s, edgecolors=acol, c='None', marker='o', ax=ax)
+        _plot_shot(ax_pitch, shot['x_scaled'], shot['y_scaled'],
+                   shot['typeId'], get_xg(shot), acol,
+                   shot.get('time_min'), str(shot.get('Big Chance', '')).lower() in ('si', 'yes', '1'))
 
-    # Stats Bars (Center)
-    labels = ["Goals", "xG", "Shots", "On Target", "Avg.Dist."]
-    values_h = [hgoal_count, hxg, hTotalShots, hShotsOnT, home_average_shot_distance]
-    values_a = [agoal_count, axg, aTotalShots, aShotsOnT, away_average_shot_distance]
-    
-    # Y positions for bars (from 60 down)
-    y_start = 65
-    y_step = 8
-    y_positions = [y_start - (i*y_step) for i in range(len(labels))]
-    
-    # Normalization (simple sum ratio scaled to width 20)
-    # Avoid div by zero
-    
-    for i, (lab, vh, va, y) in enumerate(zip(labels, values_h, values_a, y_positions)):
-        total = vh + va
-        if total == 0:
-            norm_h = 10
-            norm_a = 10
-        else:
-            norm_h = (vh / total) * 20
-            norm_a = (va / total) * 20
-            
-        # Draw Bars (Centered at x=60)
-        # Left Bar (Home) goes from (60 - norm_h) to 60? 
-        # User code: ax.barh ... left=start_x (50). 
-        # User code drew bars starting from 50 going RIGHT? 
-        # ax.barh(..., width=shooting_stats_normalized_home, left=50) -> Bars go 50->50+w.
-        # This overlays them.
-        # Typically "Butterfly chart".
-        # Home bar should go LEFT from center. Away bar RIGHT from center.
-        # Or Home bar is 50-width to 50?
-        # User code: left=start_x (50), width=stat. Then away left implies stacking?
-        # Let's Implement a clean butterfly chart centered at x=60.
-        
-        # Text Stats Layout with Background Bars
-        
-        # Draw Bars (Centered at x=60)
-        # Home Bar (growing left from 60 - gap)
-        # Using alpha=0.3 to make it subtle behind text or alpha=0.9 next to text?
-        # User asked for "bars also", implying visible bars.
-        # Let's put bars *behind* the values or *between* label and value?
-        # Or standard butterfly: Value | Bar | Label | Bar | Value
-        
-        # Standard Butterfly: 
-        # HomeVal (45) | HomeBar (50->60) | Label (60) | AwayBar (60->70) | AwayVal (75)
-        
-        gap = 5
-        bar_max_width = 15
-        
-        # Scaling: max possible width is ~15 units. 20 was arbitrary.
-        # norm_h IS the width.
-        norm_h_scaled = (norm_h / 20) * bar_max_width
-        norm_a_scaled = (norm_a / 20) * bar_max_width
-        
-        # Home Bar (Grow Left from 58)
-        ax.barh(y, norm_h_scaled, height=4, left=58-norm_h_scaled, color=hcol, alpha=0.7, align='center')
-        
-        # Away Bar (Grow Right from 62)
-        ax.barh(y, norm_a_scaled, height=4, left=62, color=acol, alpha=0.7, align='center')
+    # Stats butterfly
+    labels   = ["Goals", "xG", "Shots", "On Target", "Avg.Dist."]
+    values_h = [hgoal_count, hxg, hTotalShots, hShotsOnT, home_avg_dist]
+    values_a = [agoal_count, axg, aTotalShots, aShotsOnT, away_avg_dist]
+    y_positions = [65 - i * 8 for i in range(len(labels))]
+    for lab, vh, va, y in zip(labels, values_h, values_a, y_positions):
+        total  = (vh + va) or 1
+        norm_h = (vh / total) * 12
+        norm_a = (va / total) * 12
+        ax_pitch.barh(y, norm_h, height=3.5, left=57 - norm_h, color=hcol, alpha=0.75)
+        ax_pitch.barh(y, norm_a, height=3.5, left=63,           color=acol, alpha=0.75)
+        ax_pitch.text(60, y, lab,    color='white', fontsize=8.5, ha='center', va='center', fontweight='bold', zorder=5)
+        ax_pitch.text(57 - norm_h - 1.8, y, str(vh), color='white', fontsize=11, ha='right', va='center', fontweight='bold')
+        ax_pitch.text(63 + norm_a + 1.8, y, str(va), color='white', fontsize=11, ha='left',  va='center', fontweight='bold')
 
-        # Center Label
-        ax.text(60, y, lab, color=TACTIQ_FG, fontsize=10, ha='center', va='center', fontweight='bold', zorder=5)
-        
-        # Home Value (Left of Bar)
-        ax.text(58-norm_h_scaled-2, y, str(vh), color=TACTIQ_FG, fontsize=12, ha='right', va='center', fontweight='bold')
-        
-        # Away Value (Right of Bar)
-        ax.text(62+norm_a_scaled+2, y, str(va), color=TACTIQ_FG, fontsize=12, ha='left', va='center', fontweight='bold')
+    def _short(name):
+        return name.replace(' Spor Kulübü', '').replace(' Kulübü', '').replace(' Futbol Kulübü', '').strip()
 
+    ax_pitch.text(2,   78, _short(home_team), color=hcol, fontsize=11, ha='left',  fontweight='bold')
+    ax_pitch.text(118, 78, _short(away_team), color=acol, fontsize=11, ha='right', fontweight='bold')
 
-    # Titles and Score - REMOVED per user request
-    # ax.text(0, 85, f"{home_team}\nShots", color=hcol, size=20, ha='left', fontweight='bold')
-    # ax.text(120, 85, f"{away_team}\nShots", color=acol, size=20, ha='right', fontweight='bold')
-    
-    # Score Highlight - REMOVED per user request
-    # try:
-    #     ax_text(60, 115, f"<{home_team} {hgoal_count}> - <{agoal_count} {away_team}>", 
-    #             highlight_textprops=[{'color':hcol}, {'color':acol}],
-    #             color=TACTIQ_FG, fontsize=30, fontweight='bold', ha='center', va='center', ax=ax)
-    # except:
-    #     pass
-        
+    from matplotlib.lines import Line2D
+    legend_items = [
+        # Exactly matches _plot_shot visual encoding
+        Line2D([0],[0], marker='o', color='none', markerfacecolor='#fbbf24',
+               markeredgecolor='white', markersize=9, label='Goal'),
+        Line2D([0],[0], marker='o', color='none', markerfacecolor=hcol,
+               markeredgecolor='white', markersize=8, label='On Target (saved)'),
+        Line2D([0],[0], marker='D', color='none', markerfacecolor='none',
+               markeredgecolor='#f97316', markersize=7, label='Post'),
+        Line2D([0],[0], marker='o', color='none', markerfacecolor='none',
+               markeredgecolor='#888', markersize=6, label='Miss'),
+        Line2D([0],[0], marker='o', color='none', markerfacecolor='none',
+               markeredgecolor='#facc15', markersize=10, markeredgewidth=1.8,
+               label='Big Chance'),
+    ]
+    ax_pitch.legend(handles=legend_items, loc='lower center', ncol=5, fontsize=6.5,
+                    framealpha=0.12, facecolor=TACTIQ_BG, edgecolor='#444',
+                    labelcolor='white', bbox_to_anchor=(0.5, -0.01))
+
+    # ── Goal mouth panels ──────────────────────────────────────
+    def draw_goal_mouth(ax_g, shots_df, team_col, team_name):
+        GW, GH = 100, 45   # goal frame size in axis units
+        OX, OY =   0,  0
+
+        ax_g.set_facecolor(TACTIQ_BG)
+        ax_g.set_xlim(OX - 6, OX + GW + 6)
+        ax_g.set_ylim(OY - 9, OY + GH + 6)
+        ax_g.axis('off')
+
+        # Net background (dark green-tinted)
+        net_bg = patches.Rectangle((OX, OY), GW, GH,
+                                    facecolor='#0c1510', linewidth=0, zorder=1)
+        ax_g.add_patch(net_bg)
+
+        # Net lines — vertical
+        for nx in np.arange(OX + 8, OX + GW, 8):
+            ax_g.plot([nx, nx], [OY, OY + GH],
+                      color='#1e3322', linewidth=0.5, zorder=2)
+        # Net lines — horizontal
+        for ny in np.arange(OY + 7, OY + GH, 7):
+            ax_g.plot([OX, OX + GW], [ny, ny],
+                      color='#1e3322', linewidth=0.5, zorder=2)
+
+        # Zone dividers (thirds, half-height) — very faint
+        for xz in [OX + GW/3, OX + 2*GW/3]:
+            ax_g.plot([xz, xz], [OY, OY + GH],
+                      color='#2a2a2a', linewidth=0.8, linestyle='--', zorder=3)
+        ax_g.plot([OX, OX + GW], [OY + GH/2, OY + GH/2],
+                  color='#2a2a2a', linewidth=0.8, linestyle='--', zorder=3)
+
+        # Zone labels
+        for xz, lbl in [(OX + GW/6, 'L'), (OX + GW/2, 'C'), (OX + 5*GW/6, 'R')]:
+            ax_g.text(xz, OY + GH + 1, lbl, color='#3a3a3a', fontsize=6,
+                      ha='center', va='bottom')
+
+        # Ground / turf line (extends beyond posts)
+        ax_g.plot([OX - 4, OX + GW + 4], [OY, OY],
+                  color='#3a6b3a', linewidth=3.5, zorder=4, solid_capstyle='round')
+
+        # Posts — thick white with cap
+        post_kw = dict(color='white', linewidth=4.5, zorder=6,
+                       solid_capstyle='round', solid_joinstyle='round')
+        ax_g.plot([OX,      OX],      [OY, OY + GH], **post_kw)   # left post
+        ax_g.plot([OX + GW, OX + GW], [OY, OY + GH], **post_kw)   # right post
+        ax_g.plot([OX,      OX + GW], [OY + GH, OY + GH], **post_kw)  # crossbar
+
+        # Post depth shadow (simulate 3-D depth on posts)
+        ax_g.plot([OX, OX], [OY, OY + GH], color='#888', linewidth=1.5, zorder=5)
+        ax_g.plot([OX + GW, OX + GW], [OY, OY + GH], color='#888', linewidth=1.5, zorder=5)
+
+        # ── Plot shots on target ───────────────────────────────
+        on_target = shots_df[shots_df['typeId'].isin(
+            ['Goal', 'Attempt Saved', 'Saved Shot'])].copy()
+        on_target = on_target.dropna(
+            subset=['Goal Mouth Y Coordinate', 'Goal Mouth Z Coordinate'])
+
+        for _, shot in on_target.iterrows():
+            raw_y = float(shot['Goal Mouth Y Coordinate'])
+            raw_z = float(shot['Goal Mouth Z Coordinate'])
+            # Opta: Y 0→100 left→right post; Z 0→~85 ground→crossbar
+            x_pos = OX + (raw_y / 100) * GW
+            y_pos = OY + (raw_z / 85)  * GH
+            y_pos = np.clip(y_pos, OY + 1, OY + GH - 1)
+
+            is_goal = shot['typeId'] == 'Goal'
+
+            if is_goal:
+                # Glow layer
+                ax_g.scatter(x_pos, y_pos, s=600, color='#fbbf24',
+                             edgecolors='none', zorder=7, alpha=0.25)
+                ax_g.scatter(x_pos, y_pos, s=280, color='#fbbf24',
+                             edgecolors='white', linewidths=2, zorder=8)
+                text_col = '#1a1a1a'
+            else:
+                ax_g.scatter(x_pos, y_pos, s=180, color='none',
+                             edgecolors=team_col, linewidths=2.2, zorder=7, alpha=0.9)
+                text_col = 'white'
+
+            jersey = shot.get('Jersey Number')
+            if pd.notna(jersey):
+                ax_g.text(x_pos, y_pos, str(int(jersey)), color=text_col,
+                          fontsize=6, ha='center', va='center', zorder=9,
+                          fontweight='bold')
+
+        total_shown = len(on_target)
+        label = f'{_short(team_name)}  ·  {total_shown} shot{"s" if total_shown != 1 else ""} on target'
+        ax_g.text(OX + GW / 2, OY - 6, label, color=team_col, fontsize=7.5,
+                  ha='center', va='top', fontweight='bold')
+
+    draw_goal_mouth(ax_home_goal, hShotsdf, hcol, home_team)
+    draw_goal_mouth(ax_away_goal, aShotsdf, acol, away_team)
+
+    # ── Shot timeline ──────────────────────────────────────────
+    ax_timeline.set_facecolor(TACTIQ_BG)
+    ax_timeline.set_xlim(0, 95)
+    ax_timeline.set_ylim(-1.8, 1.8)
+    ax_timeline.axis('off')
+
+    ax_timeline.axhline(0, color='#3a3a3a', linewidth=1.2)
+
+    for min_mark, lbl in [(45, "45'"), (90, "90'")]:
+        ax_timeline.axvline(min_mark, color='#3a3a3a', linewidth=0.8, linestyle='--')
+        ax_timeline.text(min_mark, -1.65, lbl, color='#555', fontsize=6.5, ha='center')
+    ax_timeline.text(0, -1.65, "0'", color='#555', fontsize=6.5, ha='center')
+    ax_timeline.text(47.5, 1.65, 'S H O T   T I M E L I N E', color='#444',
+                     fontsize=6.5, ha='center', va='top', fontweight='bold')
+
+    ax_timeline.text(2,  0.9, _short(home_team), color=hcol, fontsize=7, ha='left', fontweight='bold', va='center')
+    ax_timeline.text(2, -0.9, _short(away_team), color=acol, fontsize=7, ha='left', fontweight='bold', va='center')
+
+    def _plot_timeline(shots_df, y_base, team_col):
+        sign = np.sign(y_base)
+        for _, shot in shots_df.iterrows():
+            minute = shot.get('time_min')
+            if pd.isna(minute):
+                continue
+            minute  = float(minute)
+            xg_val  = get_xg(shot)
+            typeId  = shot['typeId']
+            s_tl    = max(30, min(180, xg_val * 400 + 30))
+
+            if typeId == 'Goal':
+                fc, ec, mk = '#fbbf24', 'white', 'o'
+            elif typeId in ('Attempt Saved', 'Saved Shot'):
+                fc, ec, mk = team_col, 'white', 'o'
+            elif typeId == 'Post':
+                fc, ec, mk = 'none', '#f97316', 'D'
+            else:  # Miss
+                fc, ec, mk = 'none', team_col, 'o'
+                s_tl = max(20, s_tl * 0.5)
+
+            ax_timeline.scatter(minute, y_base, s=s_tl, color=fc, edgecolors=ec,
+                                marker=mk, linewidths=1.4, zorder=4)
+            label_y = y_base + (0.28 + xg_val * 0.2) * sign
+            ax_timeline.text(minute, label_y, f"{int(minute)}'",
+                             color='#fbbf24' if typeId == 'Goal' else team_col,
+                             fontsize=5, ha='center',
+                             va='bottom' if sign > 0 else 'top', alpha=0.85)
+
+    _plot_timeline(hShotsdf,  0.55, hcol)
+    _plot_timeline(aShotsdf, -0.55, acol)
+
     return fig_to_base64(fig)
 
 # --- xT Calculation Logic ---
@@ -2697,19 +3073,17 @@ def plot_average_positions(df, team_name):
     """
     fig, ax = plt.subplots(figsize=(8, 6))
     fig.patch.set_facecolor(TACTIQ_BG)
-    
+
     pitch = Pitch(pitch_type='opta', pitch_color=TACTIQ_BG, line_color=TACTIQ_FG, linewidth=1)
     pitch.draw(ax=ax)
-    
+
     team_data = df[df['team_name'] == team_name].copy()
-    
+
     if team_data.empty:
         ax.text(50, 50, "No Data", color=TACTIQ_FG, ha='center')
         return fig_to_base64(fig)
-    
-    # Identify Top 11 Players
-    # Filter for non-na
-    team_data = team_data.dropna(subset=['player_name', 'x', 'y'])
+
+    team_data = filter_position_events(team_data.dropna(subset=['player_name', 'x', 'y']))
     top_players = get_starting_xi(team_data, 'player_name')
     
     colors = plt.cm.get_cmap('tab20', len(top_players))
@@ -2864,11 +3238,12 @@ def plot_tactical_shapes(df, team_name):
     
     team_df = df[df['team_name'] == team_name].copy()
     if team_df.empty:
-         # Return placeholder
-         fig, ax = plt.subplots(figsize=(6, 4))
-         fig.patch.set_facecolor(TACTIQ_BG)
-         ax.text(0.5, 0.5, "No Data for Tactical Shapes", color='white', ha='center')
-         return fig_to_base64(fig)
+        fig, ax = plt.subplots(figsize=(6, 4))
+        fig.patch.set_facecolor(TACTIQ_BG)
+        ax.text(0.5, 0.5, "No Data for Tactical Shapes", color='white', ha='center')
+        return fig_to_base64(fig)
+
+    team_df = filter_position_events(team_df.dropna(subset=['player_name', 'x', 'y']))
 
     # Separate actions
     offensive_df = get_actions(team_df, 'offensive')
@@ -3167,101 +3542,181 @@ def create_radar_chart(categories, values_team, values_rival, team_name, rival_n
 
 def plot_starting_xi(df, team_name):
     """
-    Plots the top 11 players for a given team on two vertical pitches representing 
-    the starting XI In Possession and Out of Possession.
+    Dual-phase formation map: in-possession vs out-of-possession average positions.
+    Shows how each player's role shifts between attacking and defensive phases.
+    Connected by arrows; jersey numbers included.
     """
     from mplsoccer import VerticalPitch
-    
-    # Filter for the team
+    import matplotlib.patches as mpatches
+
+    # ── Event classification ─────────────────────────────────
+    IN_POSS_EVENTS  = {'Pass', 'Take On', 'Shot', 'Miss', 'Goal', 'Attempt Saved',
+                       'Saved Shot', 'Cross', 'Corner taken', 'Free kick taken',
+                       'Ball touch', 'Carry'}
+    OUT_POSS_EVENTS = {'Tackle', 'Interception', 'Clearance', 'Ball recovery',
+                       'Foul', 'Aerial', 'Blocked pass', 'Challenge', 'BallRecovery',
+                       'BlockedPass', 'Ball Recovery'}
+
     team_df = df[df['team_name'] == team_name].copy()
     if team_df.empty:
-        fig, ax = plt.subplots(figsize=(6, 8))
-        fig.patch.set_facecolor(TACTIQ_BG)
-        ax.text(0.5, 0.5, "No Data for Starting XI", color='white', ha='center')
-        ax.axis('off')
+        fig, ax = plt.subplots(figsize=(8, 12))
+        fig.patch.set_facecolor(TACTIQ_BG); ax.axis('off')
         return fig_to_base64(fig)
-        
-    team_data = team_df.dropna(subset=['player_name', 'x', 'y'])
-    
-    # Calculate top 11 
-    top_players = get_starting_xi(team_data, 'player_name')
-    
-    # Create side-by-side pitches
-    pitch = VerticalPitch(pitch_type='opta', pitch_color='#14532d', line_color='white', linewidth=1)
-    fig, axs = pitch.draw(nrows=1, ncols=2, figsize=(14, 10))
-    fig.set_facecolor(TACTIQ_BG)
-    
-    if not top_players:
-        return fig_to_base64(fig)
-        
-    color = TACTIQ_ACCENT
-    if 'team_position' in team_df.columns and not team_df['team_position'].empty:
-        pos = str(team_df['team_position'].iloc[0]).lower()
-        if pos == 'home': color = TACTIQ_HOME
-        elif pos == 'away': color = TACTIQ_AWAY
-        
-    # Define defensive events list for OOP analysis
-    def_types = ['BallRecovery', 'BlockedPass', 'Challenge', 'Clearance', 'Error', 'Foul', 'Interception', 'Tackle', 'Aerial']
-        
-    # Plot average positions for these 11
-    for player in top_players:
-        p_events = team_data[team_data['player_name'] == player]
-        if 'expanded_minute' in p_events.columns:
-             p_events = p_events[p_events['expanded_minute'] < 90] # roughly regular time
-             
-        # Determine In-Possession vs Out-of-Possession events
-        if 'event' in p_events.columns:
-             oop_events = p_events[p_events['event'].isin(def_types)]
-             ip_events = p_events[~p_events['event'].isin(def_types)]
-        else:
-             # Fallback if no event names
-             oop_events = p_events[p_events['x'] < 60]
-             ip_events = p_events[p_events['x'] >= 60]
-             
-        mean_ip_x, mean_ip_y = ip_events['x'].mean(), ip_events['y'].mean()
-        mean_oop_x, mean_oop_y = oop_events['x'].mean(), oop_events['y'].mean()
-        
-        # Jersey Number logic
-        jersey = p_events['jersey_number'].iloc[0] if 'jersey_number' in p_events.columns and not pd.isna(p_events['jersey_number'].iloc[0]) else None
-        
-        if jersey is not None:
-             disp_label = str(player).split()[-1]
-             inner_text = str(int(jersey))
-        else:
-             names = str(player).split(' ')
-             if len(names) > 1:
-                 disp_label = f"{names[0][0]}. {names[-1]}"
-             else:
-                 disp_label = player
-             inner_text = "".join([x[0].upper() for x in names[:2]])
-             
-        # Plot In-Possession (axs[0])
-        if not pd.isna(mean_ip_x) and not pd.isna(mean_ip_y):
-            pitch.scatter(mean_ip_x, mean_ip_y, ax=axs[0], s=350, color=color, edgecolors='white', linewidth=2, zorder=5)
-            axs[0].text(mean_ip_y, mean_ip_x + 2.5, disp_label, fontsize=10, ha='center', va='center', color='white', fontweight='bold', zorder=6)
-            axs[0].text(mean_ip_y, mean_ip_x, inner_text, fontsize=9, ha='center', va='center', fontweight='bold', color='black', zorder=6)
-        else:
-            # Fallback to total mean if no IP events
-            mean_x, mean_y = p_events['x'].mean(), p_events['y'].mean()
-            if not pd.isna(mean_x):
-                pitch.scatter(mean_x, mean_y, ax=axs[0], s=350, color=color, edgecolors='white', linewidth=2, alpha=0.5, zorder=5)
-            
-        # Plot Out-of-Possession (axs[1])
-        if not pd.isna(mean_oop_x) and not pd.isna(mean_oop_y):
-            pitch.scatter(mean_oop_x, mean_oop_y, ax=axs[1], s=350, color='#374151', edgecolors='white', linewidth=2, zorder=5)
-            axs[1].text(mean_oop_y, mean_oop_x + 2.5, disp_label, fontsize=10, ha='center', va='center', color='white', fontweight='bold', zorder=6)
-            axs[1].text(mean_oop_y, mean_oop_x, inner_text, fontsize=9, ha='center', va='center', fontweight='bold', color='white', zorder=6)
-        else:
-            # Fallback
-            mean_x, mean_y = p_events['x'].mean(), p_events['y'].mean()
-            if not pd.isna(mean_x):
-                pitch.scatter(mean_x, mean_y, ax=axs[1], s=350, color='#374151', edgecolors='white', linewidth=2, alpha=0.5, zorder=5)
 
-    axs[0].set_title(f"In Possession (Avg Position)", color='white', fontsize=16, fontweight='bold', pad=10)
-    axs[1].set_title(f"Out of Possession (Avg Position)", color='white', fontsize=16, fontweight='bold', pad=10)
-    
-    fig.suptitle(f"{team_name} - Tactical Formations", color='white', fontsize=20, fontweight='bold', y=0.98)
-    
+    team_data = filter_position_events(team_df.dropna(subset=['player_name', 'x', 'y']))
+    top_players = get_starting_xi(team_data, 'player_name')
+    if not top_players:
+        fig, ax = plt.subplots(figsize=(8, 12))
+        fig.patch.set_facecolor(TACTIQ_BG); ax.axis('off')
+        return fig_to_base64(fig)
+
+    # ── Per-player dual positions ────────────────────────────
+    player_rows = []
+    for player in top_players:
+        p_all = team_data[team_data['player_name'] == player]
+
+        p_in  = p_all[p_all['event'].isin(IN_POSS_EVENTS)]  if 'event' in p_all.columns else p_all
+        p_out = p_all[p_all['event'].isin(OUT_POSS_EVENTS)] if 'event' in p_all.columns else p_all
+
+        # Fallback to all events if phase-specific is empty
+        src_in  = p_in  if len(p_in)  >= 5 else p_all
+        src_out = p_out if len(p_out) >= 5 else p_all
+
+        ax_in,  ay_in  = src_in['x'].mean(),  src_in['y'].mean()
+        ax_out, ay_out = src_out['x'].mean(), src_out['y'].mean()
+
+        # Jersey number
+        jersey = None
+        for jcol in ('Jersey Number', 'jersey_number'):
+            if jcol in p_all.columns:
+                v = p_all[jcol].dropna()
+                if not v.empty:
+                    jersey = int(v.iloc[0])
+                    break
+
+        names   = str(player).split()
+        surname = names[-1] if len(names) > 1 else player
+
+        if not (pd.isna(ax_in) or pd.isna(ay_in)):
+            player_rows.append({
+                'name': player, 'surname': surname,
+                'jersey': str(jersey) if jersey is not None else surname[:2].upper(),
+                'x_in': ax_in,  'y_in': ay_in,
+                'x_out': ax_out if not pd.isna(ax_out) else ax_in,
+                'y_out': ay_out if not pd.isna(ay_out) else ay_in,
+                'n_in': len(src_in), 'n_out': len(src_out),
+            })
+
+    if not player_rows:
+        fig, ax = plt.subplots(figsize=(8, 12))
+        fig.patch.set_facecolor(TACTIQ_BG); ax.axis('off')
+        return fig_to_base64(fig)
+
+    pdf = pd.DataFrame(player_rows)
+
+    # Identify GK (lowest x_in)
+    gk_idx = pdf['x_in'].idxmin()
+    pdf['is_gk'] = False
+    pdf.loc[gk_idx, 'is_gk'] = True
+
+    # ── Draw pitch ───────────────────────────────────────────
+    pitch = VerticalPitch(pitch_type='opta', pitch_color=TACTIQ_BG,
+                          line_color='#3a3a3a', linewidth=1.2)
+    fig, ax = pitch.draw(figsize=(7, 10))
+    fig.set_facecolor(TACTIQ_BG)
+
+    ATT_COL  = '#fbbf24'   # in-possession (attacking shape)
+    DEF_COL  = '#60a5fa'   # out-of-possession (defensive shape)
+    GK_COL   = '#6b7280'
+
+    # ── Formation lines (connect players by x-band) ──────────
+    # Group into lines by x_in (opta 0-100, attacking = 100)
+    def _draw_formation_lines(pdf_sub, x_col, y_col, col, lw=1.2, alpha=0.3):
+        sorted_p = pdf_sub.sort_values(x_col)
+        # Cluster into lines (gap > 8 opta units)
+        lines, cur = [], [sorted_p.iloc[0]]
+        for i in range(1, len(sorted_p)):
+            if sorted_p.iloc[i][x_col] - sorted_p.iloc[i-1][x_col] > 8:
+                lines.append(cur); cur = []
+            cur.append(sorted_p.iloc[i])
+        lines.append(cur)
+        for line in lines:
+            if len(line) < 2:
+                continue
+            ys = sorted([r[y_col] for r in line])
+            xs = [line[0][x_col]] * len(ys)
+            # VerticalPitch: x→vertical, y→horizontal
+            ax.plot([y for y in ys], [x for x in xs],
+                    color=col, linewidth=lw, alpha=alpha, zorder=2,
+                    solid_capstyle='round')
+
+    _draw_formation_lines(pdf, 'x_in',  'y_in',  ATT_COL, lw=1.5, alpha=0.35)
+    _draw_formation_lines(pdf, 'x_out', 'y_out', DEF_COL, lw=1.5, alpha=0.35)
+
+    # ── Shift arrows ─────────────────────────────────────────
+    for _, p in pdf.iterrows():
+        dx = p['y_out'] - p['y_in']   # horizontal shift (VerticalPitch: y→x-axis)
+        dy = p['x_out'] - p['x_in']   # vertical shift
+        dist = np.sqrt(dx**2 + dy**2)
+        if dist > 2.0:                 # only draw arrow if meaningful shift
+            ax.annotate('', xy=(p['y_out'], p['x_out']),
+                        xytext=(p['y_in'], p['x_in']),
+                        arrowprops=dict(arrowstyle='->', color='white',
+                                        lw=0.8, alpha=0.3),
+                        zorder=3)
+
+    # ── Player nodes ─────────────────────────────────────────
+    for _, p in pdf.iterrows():
+        gk = p['is_gk']
+        jersey_txt = p['jersey']
+
+        # Out-of-possession node (hollow blue)
+        ax.scatter(p['y_out'], p['x_out'], s=380, color='none',
+                   edgecolors=GK_COL if gk else DEF_COL,
+                   linewidths=2.0, zorder=4, alpha=0.75)
+
+        # In-possession node (filled gold/grey)
+        fc = GK_COL if gk else ATT_COL
+        ax.scatter(p['y_in'], p['x_in'], s=460, color=fc,
+                   edgecolors='white', linewidths=1.5, zorder=5)
+
+        # Jersey number
+        ax.text(p['y_in'], p['x_in'], jersey_txt,
+                fontsize=9, ha='center', va='center',
+                fontweight='bold', color='#1a1a1a' if not gk else 'white',
+                zorder=6)
+
+        # Surname label (positioned away from the node)
+        ax.text(p['y_in'], p['x_in'] - 4.5, p['surname'],
+                fontsize=7.5, ha='center', va='top',
+                color='#d1d5db', fontweight='600', zorder=6)
+
+    # ── Legend ───────────────────────────────────────────────
+    from matplotlib.lines import Line2D
+    legend_items = [
+        Line2D([0],[0], marker='o', color='none', markerfacecolor=ATT_COL,
+               markeredgecolor='white', markersize=9, label='In Possession'),
+        Line2D([0],[0], marker='o', color='none', markerfacecolor='none',
+               markeredgecolor=DEF_COL, markeredgewidth=2, markersize=9,
+               label='Out of Possession'),
+        Line2D([0],[0], color='white', linewidth=0.8, alpha=0.4,
+               marker='>', markersize=5, label='Position Shift'),
+    ]
+    ax.legend(handles=legend_items, loc='lower center', ncol=3,
+              fontsize=7, framealpha=0.15, facecolor=TACTIQ_BG,
+              edgecolor='#333', labelcolor='white',
+              bbox_to_anchor=(0.5, -0.02))
+
+    # Attacking direction arrow (left side of pitch)
+    ax.annotate('', xy=(2, 88), xytext=(2, 60),
+                arrowprops=dict(arrowstyle='->', color='#4ade80', lw=1.8))
+    ax.text(2, 74, 'ATTACK', color='#4ade80', fontsize=6.5, ha='center',
+            va='center', fontweight='bold', rotation=90)
+
+    clean = team_name.replace(' Kulübü','').replace(' Spor','').replace(' Futbol','').strip()
+    ax.set_title(f"{clean}  —  Dual Phase Positions",
+                 color='white', fontsize=15, fontweight='bold', pad=12)
+
     return fig_to_base64(fig)
 
 
@@ -3373,9 +3828,9 @@ def plot_territorial_voronoi(df, home_team, away_team):
         ax.axis('off')
         return fig_to_base64(fig)
         
-    home_data = home_df.dropna(subset=['player_name', 'x', 'y'])
-    away_data = away_df.dropna(subset=['player_name', 'x', 'y'])
-    
+    home_data = filter_position_events(home_df.dropna(subset=['player_name', 'x', 'y']))
+    away_data = filter_position_events(away_df.dropna(subset=['player_name', 'x', 'y']))
+
     top_home = get_starting_xi(home_data, 'player_name')
     top_away = get_starting_xi(away_data, 'player_name')
     

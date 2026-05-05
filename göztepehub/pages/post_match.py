@@ -552,6 +552,18 @@ def _build_h2h_section(rival, opp_name):
                              style={"width": "100%", "borderRadius": "8px"}),
                 ], md=12),
             ]),
+            dbc.Row(style={"marginTop": "20px"}, children=[
+                dbc.Col([
+                    html.Div("BOX ENTRY MAP", style={"fontSize": "0.72rem", "fontWeight": "700",
+                        "color": GOLD, "letterSpacing": "1px", "marginBottom": "3px",
+                        "textAlign": "center"}),
+                    html.Div("Pass başlangıç noktaları · Gold = ground · Blue = cross",
+                             style={"fontSize": "0.58rem", "color": "rgba(255,255,255,0.3)",
+                                    "textAlign": "center", "marginBottom": "6px"}),
+                    html.Img(src=_build_box_entry_map(goz_df, opp_df, goz_short, opp_name),
+                             style={"width": "100%", "borderRadius": "8px"}),
+                ], md=12),
+            ]),
         ])
         sections.append(match_card)
 
@@ -833,6 +845,55 @@ def _build_xg_timeline(goz_df, opp_df, goz_short, opp_name):
     )
     return dcc.Graph(figure=fig, config={'displayModeBar': False},
                      style={'width': '100%'})
+
+
+def _build_box_entry_map(goz_df, opp_df, goz_short, opp_name):
+    BOX_X_MIN, BOX_Y_MIN, BOX_Y_MAX = 83, 21, 79
+
+    def get_entries(df):
+        if 'Pass End X' not in df.columns or 'Pass End Y' not in df.columns:
+            return pd.DataFrame(), pd.DataFrame()
+        ent = df[
+            (df['type_id'] == 1) &
+            (df['outcome'] == 1) &
+            (df['Pass End X'].notna()) &
+            (df['Pass End X'] > BOX_X_MIN) &
+            (df['Pass End Y'].between(BOX_Y_MIN, BOX_Y_MAX)) &
+            ~((df['x'] > BOX_X_MIN) & (df['y'].between(BOX_Y_MIN, BOX_Y_MAX)))
+        ].copy()
+        crosses = ent[ent['Cross'] == 'Si'] if 'Cross' in ent.columns else pd.DataFrame()
+        ground  = ent[ent['Cross'] != 'Si'] if 'Cross' in ent.columns else ent
+        return ground, crosses
+
+    goz_gnd, goz_cross = get_entries(goz_df)
+    opp_gnd, opp_cross = get_entries(opp_df)
+
+    pitch = Pitch(pitch_type='opta', pitch_color=PITCH_BG,
+                  line_color=(1.0, 1.0, 1.0, 0.55), linewidth=1.5, half=True)
+    fig, axes = pitch.draw(nrows=1, ncols=2, figsize=(14, 5))
+    fig.patch.set_facecolor(PITCH_BG)
+
+    total_goz = len(goz_gnd) + len(goz_cross)
+    total_opp = len(opp_gnd) + len(opp_cross)
+
+    for ax, gnd, crs, base_color, label in [
+        (axes[0], goz_gnd, goz_cross, GOLD, f'Göztepe — {total_goz} box entry'),
+        (axes[1], opp_gnd, opp_cross, RED,  f'{opp_name} — {total_opp} box entry'),
+    ]:
+        ax.set_facecolor(PITCH_BG)
+        ax.set_title(label, color='white', fontsize=9, pad=5, fontweight='bold')
+        if not gnd.empty:
+            pitch.scatter(gnd['x'].values, gnd['y'].values, s=55, color=base_color,
+                          alpha=0.75, ax=ax, edgecolors='white', linewidth=0.5,
+                          label='Ground', zorder=3)
+        if not crs.empty:
+            pitch.scatter(crs['x'].values, crs['y'].values, s=55, color=BLUE,
+                          alpha=0.75, ax=ax, edgecolors='white', linewidth=0.5,
+                          label='Cross', zorder=3)
+        _mpl_legend(ax)
+
+    plt.tight_layout(pad=0.5)
+    return _fig_to_base64(fig)
 
 
 def _build_pressing_map(goz_df, opp_df, goz_short, opp_name):

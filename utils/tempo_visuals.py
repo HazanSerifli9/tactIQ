@@ -16,11 +16,19 @@ from utils.visuals import (
 )
 
 ROLE_COLORS = {
-    'Metronome': '#3b82f6',
-    'Direct':    '#ef4444',
-    'Recycler':  '#a0aec0',
-    'Connector': '#fbbf24',
+    'Playmaker':     '#3b82f6',
+    'Direct Passer': '#ef4444',
+    'Safe Passer':   '#a0aec0',
+    'Link Player':   '#fbbf24',
 }
+
+COACH_ROLES = {
+    'Metronome': 'Playmaker',
+    'Direct':    '#ef4444', # Note: actually 'Direct Passer', mapped below
+    'Recycler':  'Safe Passer',
+    'Connector': 'Link Player'
+}
+COACH_ROLES['Direct'] = 'Direct Passer'
 
 _TEMPO_CDICT = {
     'red':  ((0.0, 0.93, 0.93), (0.5, 0.98, 0.98), (1.0, 0.23, 0.23)),
@@ -206,7 +214,8 @@ def plot_hybrid_pass_network(df, team_name: str, t_data: Dict[str, Any]) -> str:
             sz   = MIN_SZ + (row['count'] / max_c) * (MAX_SZ - MIN_SZ)
 
             short  = get_shorter_name(player)
-            role   = role_map.get(short, role_map.get(player.split()[-1], 'Connector'))
+            orig_role = role_map.get(short, role_map.get(player.split()[-1], 'Connector'))
+            role = COACH_ROLES.get(orig_role, orig_role)
             border = ROLE_COLORS.get(role, '#fbbf24')
 
             # Soft glow ring
@@ -225,19 +234,20 @@ def plot_hybrid_pass_network(df, team_name: str, t_data: Dict[str, Any]) -> str:
                    color=TACTIQ_FG, fontsize=13, fontweight='bold', pad=8)
 
     # Role legend (bottom of pitch panel)
-    legend_x = [0.10, 0.32, 0.55, 0.78]
-    for i, (role, rc) in enumerate(ROLE_COLORS.items()):
-        circ = patches.Circle((legend_x[i], -0.045), 0.012,
-                               facecolor='#0f172a', edgecolor=rc, lw=2,
-                               transform=ax_p.transAxes, clip_on=False)
-        ax_p.add_patch(circ)
-        ax_p.text(legend_x[i], -0.075, role, ha='center', color=rc,
-                  fontsize=7.5, transform=ax_p.transAxes)
+    from matplotlib.lines import Line2D
+    legend_elements = []
+    for role, rc in ROLE_COLORS.items():
+        legend_elements.append(Line2D([0], [0], marker='o', color='w', label=role,
+                                      markerfacecolor='#0f172a', markeredgecolor=rc,
+                                      markersize=12, markeredgewidth=2, linestyle='None'))
+    
+    ax_p.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, -0.06),
+                ncol=4, frameon=False, fontsize=9, labelcolor='white')
 
     # Speed colorbar
     sm   = plt.cm.ScalarMappable(cmap=TEMPO_CMAP, norm=plt.Normalize(2.5, 4.0))
     cbar = fig.colorbar(sm, ax=ax_p, orientation='horizontal',
-                        fraction=0.025, pad=0.12, aspect=50)
+                        fraction=0.025, pad=0.15, aspect=50)
     cbar.set_ticks([2.5, 4.0])
     cbar.set_ticklabels(['Fast (<2.5 s)', 'Slow (>4.0 s)'])
     cbar.ax.tick_params(colors=TACTIQ_FG, labelsize=7)
@@ -350,12 +360,13 @@ def plot_tempo_network(tempo_data: Dict[str, Any], team_name: str) -> str:
         label  = str(int(jersey)) if jersey is not None else ''.join(
             [n[0] for n in player.split()[:2]]).upper()
 
-        role = 'Connector'
+        orig_role = 'Connector'
         for p in tempo_data.get('profiles', []):
             if p['Player'] == player:
-                role = p['Role']
+                orig_role = p['Role']
                 break
 
+        role = COACH_ROLES.get(orig_role, orig_role)
         border_color = ROLE_COLORS.get(role, '#ffffff')
         circle = patches.Circle((x, y), radius=2.5, facecolor='#111827',
                                  edgecolor=border_color, lw=2, zorder=4)
