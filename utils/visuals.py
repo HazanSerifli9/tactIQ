@@ -999,7 +999,15 @@ def plot_defensive_profile(df, team_name):
 
 
 def plot_progressive_pass_map(df, team_name):
+    """
+    Three-panel progressive pass map: one pitch per origin zone (Own Half /
+    Mid Third / Att Third), so each panel has ~30 passes instead of 95.
+    Bar chart on the right shows top progressors.
+    """
     from mplsoccer import Pitch as MplPitch
+    from matplotlib import gridspec
+    from matplotlib.patches import Patch
+
     df = preprocess_for_network(df)
 
     df['pro'] = np.where(
@@ -1008,137 +1016,138 @@ def plot_progressive_pass_map(df, team_name):
         np.sqrt((120 - df['end_x_scaled'])**2 + (40 - df['end_y_scaled'])**2),
         0
     )
-
     mask = (
         (df['team_name'] == team_name) &
         (df['pro'] >= 9.144) &
-        (df['x_scaled'] <= 115) &
-        (df['x_scaled'] >= 40)
+        (df['x_scaled'].between(40, 115))
     )
     for col in ('cross', 'Cross'):
         if col in df.columns:
-            mask = mask & (df[col].astype(str) != 'True') & (df[col].astype(str) != 'Cross')
+            mask = mask & (~df[col].astype(str).isin(['True', 'Cross']))
 
     dfpro = df[mask].copy()
     pro_count = len(dfpro)
 
     if pro_count == 0:
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(8, 5))
         fig.patch.set_facecolor(TACTIQ_BG)
-        ax.text(0.5, 0.5, "No Progressive Passes Found", color=TACTIQ_FG, ha="center")
+        ax.text(0.5, 0.5, "No Progressive Passes Found",
+                color=TACTIQ_FG, ha="center", transform=ax.transAxes)
         ax.axis('off')
         return fig_to_base64(fig)
 
-    # --- Origin zone classification (StatsBomb x: 0-120, halfway=60) ---
-    # Own half: 40-60 | Middle third: 60-80 | Attacking third: 80-115
-    ZONE_COLORS  = {'Own Half': '#457b9d', 'Middle Third': '#ff9f1c', 'Final Third': '#e63946'}
-    ZONE_LABELS  = ['Own Half', 'Middle Third', 'Final Third']
+    ZONES = [
+        ('Own Half',     '#457b9d', 40,  60),
+        ('Mid Third',    '#ff9f1c', 60,  80),
+        ('Att Third',    '#e63946', 80, 115),
+    ]
 
     def origin_zone(x):
         if x < 60:  return 'Own Half'
-        if x < 80:  return 'Middle Third'
-        return 'Final Third'
+        if x < 80:  return 'Mid Third'
+        return 'Att Third'
 
-    dfpro['origin_zone'] = dfpro['x_scaled'].apply(origin_zone)
+    dfpro['zone'] = dfpro['x_scaled'].apply(origin_zone)
 
-    # --- Player contribution (top 7) ---
+    # ── Player bar chart data ────────────────────────────────
     name_col = 'player_name' if 'player_name' in dfpro.columns else None
     player_counts = None
     if name_col:
         player_counts = (
-            dfpro.groupby(name_col)
-            .size()
+            dfpro.groupby(name_col).size()
             .reset_index(name='count')
             .sort_values('count', ascending=True)
             .tail(7)
         )
         player_counts['short'] = player_counts[name_col].apply(get_short_name)
 
-    # --- Figure layout: pitch left (70%) + bar chart right (30%) ---
-    fig = plt.figure(figsize=(15, 7))
+    # ── Figure: 3 zone pitches (top) + bar chart (right) ────
+    fig = plt.figure(figsize=(16, 7), constrained_layout=True)
     fig.patch.set_facecolor(TACTIQ_BG)
 
-    if player_counts is not None and not player_counts.empty:
-        gs = fig.add_gridspec(1, 2, width_ratios=[2.2, 1], wspace=0.04)
-        ax_pitch = fig.add_subplot(gs[0])
-        ax_bar   = fig.add_subplot(gs[1])
+    has_bar = player_counts is not None and not player_counts.empty
+    if has_bar:
+        gs_outer = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[3, 1])
+        gs_pitches = gridspec.GridSpecFromSubplotSpec(1, 3, subplot_spec=gs_outer[0])
+        ax_bar = fig.add_subplot(gs_outer[1])
     else:
-        ax_pitch = fig.add_subplot(1, 1, 1)
-        ax_bar   = None
+        gs_pitches = gridspec.GridSpec(1, 3, figure=fig)
+        ax_bar = None
 
-    pitch = MplPitch(pitch_type='statsbomb', pitch_color=TACTIQ_BG, line_color=TACTIQ_FG,
-                     linewidth=1.8, corner_arcs=True)
-    pitch.draw(ax=ax_pitch)
+    pitch_kw = dict(pitch_type='statsbomb', pitch_color=TACTIQ_BG,
+                    line_color='#444', linewidth=1.2, corner_arcs=True)
 
-    # Vertical third lines on pitch
-    for x_line in (60, 80):
-        ax_pitch.axvline(x_line, color=TACTIQ_FG, linestyle='dashed', alpha=0.25, lw=1)
+    clean_name = (team_name.replace(' Kulübü','').replace(' Spor','')
+                            .replace(' Futbol','').strip())
 
-    # Draw passes colored by origin zone
-    for zone, color in ZONE_COLORS.items():
-        sub = dfpro[dfpro['origin_zone'] == zone]
-        if sub.empty:
-            continue
-        pitch.lines(sub.x_scaled, sub.y_scaled,
-                    sub.end_x_scaled, sub.end_y_scaled,
-                    lw=2.2, transparent=True, comet=True,
-                    color=color, ax=ax_pitch, alpha=0.65, zorder=3)
-        pitch.scatter(sub.end_x_scaled, sub.end_y_scaled,
-                      s=40, edgecolor=color, linewidth=1.2,
-                      color=TACTIQ_BG, zorder=4, ax=ax_pitch)
+    for col_idx, (zone_name, color, x_lo, x_hi) in enumerate(ZONES):
+        sub = dfpro[dfpro['zone'] == zone_name]
+        n   = len(sub)
+        pct = round(n / pro_count * 100) if pro_count else 0
 
-    # Zone counts — small labels at pitch thirds
-    for zone, x_center, label in (
-        ('Own Half',      50, 'Own Half'),
-        ('Middle Third',  70, 'Mid Third'),
-        ('Final Third',   97, 'Att Third'),
-    ):
-        n = len(dfpro[dfpro['origin_zone'] == zone])
-        pct = round(n / pro_count * 100)
-        color = ZONE_COLORS[zone]
-        ax_pitch.text(x_center, -3, f'{label}\n{n}  ({pct}%)',
-                      ha='center', va='top', color=color,
-                      fontsize=8.5, fontweight='bold',
-                      transform=ax_pitch.transData)
+        ax_z = fig.add_subplot(gs_pitches[col_idx])
+        pitch = MplPitch(**pitch_kw)
+        pitch.draw(ax=ax_z)
 
-    # Legend patches
-    from matplotlib.patches import Patch
-    legend_handles = [Patch(facecolor=ZONE_COLORS[z], label=z) for z in ZONE_LABELS]
-    ax_pitch.legend(handles=legend_handles, loc='upper left',
-                    facecolor=TACTIQ_BG, edgecolor='none',
-                    labelcolor=TACTIQ_FG, fontsize=8.5, framealpha=0.7)
+        # Shade the origin zone on this pitch
+        ax_z.axvspan(x_lo, x_hi, color=color, alpha=0.07, zorder=0)
+        ax_z.axvline(x_lo, color=color, lw=0.8, alpha=0.4, linestyle='--')
+        ax_z.axvline(x_hi, color=color, lw=0.8, alpha=0.4, linestyle='--')
 
-    clean_name = team_name.replace(' Kulübü','').replace(' Spor','').replace(' Futbol','').replace(' A.Ş.','').strip()
-    ax_pitch.set_title(f"{clean_name}  ·  {pro_count} Progressive Passes",
-                       color=TACTIQ_FG, fontsize=14, fontweight='bold', pad=10)
+        if not sub.empty:
+            pitch.lines(sub.x_scaled, sub.y_scaled,
+                        sub.end_x_scaled, sub.end_y_scaled,
+                        lw=2.0, transparent=True, comet=True,
+                        color=color, ax=ax_z, alpha=0.75, zorder=3)
+            pitch.scatter(sub.end_x_scaled, sub.end_y_scaled,
+                          s=35, edgecolor=color, linewidth=1.2,
+                          color=TACTIQ_BG, zorder=4, ax=ax_z)
 
-    # --- Player bar chart ---
-    if ax_bar is not None and player_counts is not None and not player_counts.empty:
+        ax_z.set_title(f"{zone_name}\n{n} passes  ({pct}%)",
+                       color=color, fontsize=10, fontweight='bold', pad=6)
+
+        # Small "total" annotation bottom-left only on first panel
+        if col_idx == 0:
+            ax_z.text(1, 2, f"{clean_name}  ·  {pro_count} total",
+                      color='#888', fontsize=7.5, va='bottom')
+
+    # ── Bar chart ────────────────────────────────────────────
+    if ax_bar is not None:
         ax_bar.set_facecolor(TACTIQ_BG)
-        bar_colors = [TACTIQ_WARNING] * len(player_counts)
-        # Highlight the top passer
-        bar_colors[-1] = TACTIQ_HOME
 
-        bars = ax_bar.barh(
-            player_counts['short'], player_counts['count'],
-            color=bar_colors, height=0.6, edgecolor='none'
-        )
-        # Value labels
+        # Color bars by the zone each player predominantly passes from
+        def player_top_zone(player):
+            p_sub = dfpro[dfpro[name_col] == player]
+            if p_sub.empty:
+                return '#888'
+            top = p_sub['zone'].value_counts().idxmax()
+            return {z[0]: z[1] for z in ZONES}.get(top, '#888')
+
+        bar_colors = [player_top_zone(p) for p in player_counts[name_col]]
+
+        bars = ax_bar.barh(player_counts['short'], player_counts['count'],
+                           color=bar_colors, height=0.6, edgecolor='none', alpha=0.85)
         for bar in bars:
             w = bar.get_width()
-            ax_bar.text(w + 0.15, bar.get_y() + bar.get_height() / 2,
+            ax_bar.text(w + 0.1, bar.get_y() + bar.get_height() / 2,
                         str(int(w)), va='center', ha='left',
                         color=TACTIQ_FG, fontsize=9, fontweight='bold')
 
-        ax_bar.set_xlim(0, player_counts['count'].max() + 2)
-        ax_bar.set_xlabel('Progressive Passes', color='#aaa', fontsize=9)
-        ax_bar.tick_params(axis='y', labelsize=9, colors=TACTIQ_FG)
-        ax_bar.tick_params(axis='x', labelsize=8, colors='#888')
+        ax_bar.set_xlim(0, player_counts['count'].max() + 3)
+        ax_bar.set_xlabel('Progressive Passes', color='#888', fontsize=8)
+        ax_bar.tick_params(axis='y', labelsize=8.5, colors=TACTIQ_FG)
+        ax_bar.tick_params(axis='x', labelsize=7.5, colors='#666')
         ax_bar.spines[:].set_visible(False)
-        ax_bar.xaxis.grid(True, color='#ffffff18', linewidth=0.6)
+        ax_bar.xaxis.grid(True, color='#ffffff15', linewidth=0.5)
         ax_bar.set_axisbelow(True)
-        ax_bar.set_title('Top Progressors', color=TACTIQ_FG, fontsize=10,
-                         fontweight='bold', pad=8)
+        ax_bar.set_title('Top Progressors\n(color = origin zone)',
+                         color=TACTIQ_FG, fontsize=9, fontweight='bold', pad=8)
+
+        # Zone legend
+        legend_handles = [Patch(facecolor=z[1], label=z[0], alpha=0.85) for z in ZONES]
+        ax_bar.legend(handles=legend_handles, loc='lower right', fontsize=7,
+                      facecolor=TACTIQ_BG, edgecolor='#333', labelcolor='white',
+                      framealpha=0.6)
 
     return fig_to_base64(fig)
 
@@ -3811,119 +3820,143 @@ def plot_player_comparison_scatter(df, team_name, metric_x, metric_y):
     return fig_to_base64(fig)
 
 
-def plot_territorial_voronoi(df, home_team, away_team):
+def plot_pitch_dominance(df, home_team, away_team):
     """
-    Plots a Voronoi diagram based on the average positions of both teams' starting XIs.
-    Demonstrates territorial control.
+    Cell-based pitch dominance map.
+    Each zone is colored by which team had more on-ball actions there.
+    Home = TACTIQ_HOME (red), Away = TACTIQ_AWAY (blue).
+    Intensity = margin of dominance.
     """
     from mplsoccer import Pitch
-    import numpy as np
-    
+    import matplotlib.gridspec as gridspec
+    from matplotlib.patches import FancyBboxPatch
+
+    def _clean(name):
+        return name.replace(' Kulübü','').replace(' Spor','').replace(' Futbol','').strip()
+
+    BAL_EVENTS = {'Pass', 'Take On', 'Shot', 'Ball touch', 'Carry',
+                  'Cross', 'Clearance', 'Header', 'Miss', 'Goal',
+                  'Attempt Saved', 'Post', 'Saved Shot', 'Ball Recovery',
+                  'Tackle', 'Interception', 'Foul', 'Aerial'}
+
     home_df = df[df['team_name'] == home_team].copy()
     away_df = df[df['team_name'] == away_team].copy()
-    
-    if home_df.empty or away_df.empty:
-        fig, ax = plt.subplots(figsize=(10, 7))
-        fig.patch.set_facecolor(TACTIQ_BG)
-        ax.axis('off')
-        return fig_to_base64(fig)
-        
-    home_data = filter_position_events(home_df.dropna(subset=['player_name', 'x', 'y']))
-    away_data = filter_position_events(away_df.dropna(subset=['player_name', 'x', 'y']))
 
-    top_home = get_starting_xi(home_data, 'player_name')
-    top_away = get_starting_xi(away_data, 'player_name')
-    
-    if not top_home or not top_away:
-        fig, ax = plt.subplots(figsize=(10, 7))
-        fig.patch.set_facecolor(TACTIQ_BG)
-        ax.axis('off')
-        return fig_to_base64(fig)
-        
-    xs, ys, teams = [], [], []
-    
-    # Pre-process regular time events
-    if 'expanded_minute' in home_data.columns:
-        home_data = home_data[home_data['expanded_minute'] < 90]
-    if 'expanded_minute' in away_data.columns:
-        away_data = away_data[away_data['expanded_minute'] < 90]
-        
-    for p in top_home:
-        p_events = home_data[home_data['player_name'] == p]
-        if not p_events.empty:
-            xs.append(p_events['x'].mean())
-            ys.append(p_events['y'].mean())
-            teams.append(1)  # home
-            
-    for p in top_away:
-        p_events = away_data[away_data['player_name'] == p]
-        if not p_events.empty:
-            # Flip coordinates so teams face each other
-            xs.append(100 - p_events['x'].mean())
-            ys.append(100 - p_events['y'].mean()) 
-            teams.append(0)  # away
+    if 'event' in df.columns:
+        home_df = home_df[home_df['event'].isin(BAL_EVENTS)]
+        away_df = away_df[away_df['event'].isin(BAL_EVENTS)]
 
-    xs = np.array(xs)
-    ys = np.array(ys)
-    teams = np.array(teams)
-    
-    pitch = Pitch(pitch_type='opta', pitch_color=TACTIQ_BG, line_color=TACTIQ_FG, linewidth=1.5)
-    fig, ax = pitch.draw(figsize=(10, 7))
+    home_df = home_df[home_df['x'].notna() & home_df['y'].notna()]
+    away_df = away_df[away_df['x'].notna() & away_df['y'].notna()]
+
+    # ── Grid setup ────────────────────────────────────────────────────────────
+    COLS, ROWS = 5, 3
+    x_edges = np.linspace(0, 100, COLS + 1)
+    y_edges = np.linspace(0, 100, ROWS + 1)
+
+    def count_grid(events_df):
+        grid = np.zeros((ROWS, COLS))
+        if events_df.empty:
+            return grid
+        xi = np.clip(np.digitize(events_df['x'], x_edges) - 1, 0, COLS - 1)
+        yi = np.clip(np.digitize(events_df['y'], y_edges) - 1, 0, ROWS - 1)
+        for xi_, yi_ in zip(xi, yi):
+            grid[yi_, xi_] += 1
+        return grid
+
+    home_grid = count_grid(home_df)
+    away_grid = count_grid(away_df)
+    total_grid = home_grid + away_grid
+    total_grid[total_grid == 0] = 1
+
+    home_pct_grid = home_grid / total_grid
+
+    # ── Figure ────────────────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(13, 7), constrained_layout=True)
     fig.patch.set_facecolor(TACTIQ_BG)
-    
-    try:
-        team1_voronoi, team2_voronoi = pitch.voronoi(xs, ys, teams)
-        
-        # Draw Voronoi for home (Blue/TACTIQ_HOME) and away (Red/TACTIQ_AWAY)
-        pitch.polygon(team1_voronoi, ax=ax, fc=TACTIQ_HOME, ec='white', alpha=0.35, lw=1.5)
-        pitch.polygon(team2_voronoi, ax=ax, fc=TACTIQ_AWAY, ec='white', alpha=0.35, lw=1.5)
-    except Exception as e:
-        print(f"Voronoi failed: {e}")
-        pass
-        
-    # Scatter player locations
-    pitch.scatter(xs[teams==1], ys[teams==1], ax=ax, c=TACTIQ_HOME, s=200, ec='white', linewidth=2, zorder=4)
-    pitch.scatter(xs[teams==0], ys[teams==0], ax=ax, c=TACTIQ_AWAY, s=200, ec='white', linewidth=2, zorder=4)
-    
-    # Calculate territorial dominance by sampling
-    grid_res = 100
-    xx, yy = np.meshgrid(np.linspace(0, 100, grid_res), np.linspace(0, 100, grid_res))
-    pts = np.c_[xx.ravel(), yy.ravel()]
-    
-    from scipy.spatial import distance
-    dists = distance.cdist(pts, np.column_stack((xs, ys)))
-    nearest = np.argmin(dists, axis=1)
-    home_pixels = np.sum(teams[nearest] == 1)
-    total_pixels = len(nearest)
-    
-    home_pct = (home_pixels / total_pixels) * 100
-    away_pct = 100 - home_pct
-    
-    # Text formatting
-    clean_home = home_team.replace(' Kulübü', '').replace(' Spor', '').replace(' Futbol', '').replace(' A.Ş.', '').strip()
-    clean_away = away_team.replace(' Kulübü', '').replace(' Spor', '').replace(' Futbol', '').replace(' A.Ş.', '').strip()
-    
-    ax.set_title("Territorial Map (Voronoi Control)", color='white', fontsize=18, fontweight='bold', pad=25)
 
-    # Add floating percentage boxes
-    ax.text(10, 105, f"{clean_home}\n{home_pct:.1f}%", ha='center', va='center', color='white', fontsize=14, fontweight='bold', bbox=dict(facecolor=TACTIQ_HOME, alpha=0.8, edgecolor='none', boxstyle='round,pad=0.5'))
-    ax.text(90, 105, f"{clean_away}\n{away_pct:.1f}%", ha='center', va='center', color='white', fontsize=14, fontweight='bold', bbox=dict(facecolor=TACTIQ_AWAY, alpha=0.8, edgecolor='none', boxstyle='round,pad=0.5'))
+    gs = gridspec.GridSpec(2, 1, figure=fig, height_ratios=[1, 8])
+    ax_bar  = fig.add_subplot(gs[0])
+    ax_pitch = fig.add_subplot(gs[1])
 
-    # Attack direction arrows — home attacks right, away attacks left (coords are flipped)
-    ax.annotate('', xy=(85, 108), xytext=(35, 108),
-                arrowprops=dict(arrowstyle='->', color=TACTIQ_HOME, lw=2.5))
-    ax.text(60, 111, 'ATTACK →', ha='center', va='center', color=TACTIQ_HOME,
-            fontsize=9, fontweight='bold', alpha=0.9)
+    pitch = Pitch(pitch_type='opta', pitch_color=TACTIQ_BG,
+                  line_color='#555', linewidth=1.2, corner_arcs=True)
+    pitch.draw(ax=ax_pitch)
 
-    ax.annotate('', xy=(15, 108), xytext=(65, 108),
-                arrowprops=dict(arrowstyle='->', color=TACTIQ_AWAY, lw=2.5))
-    ax.text(40, 111, '← ATTACK', ha='center', va='center', color=TACTIQ_AWAY,
-            fontsize=9, fontweight='bold', alpha=0.9)
+    clean_home = _clean(home_team)
+    clean_away = _clean(away_team)
 
-    # Half labels at the bottom of the pitch
-    ax.text(25, -5, f"{clean_home} DEF HALF", ha='center', va='center',
-            color='white', fontsize=8, alpha=0.5, style='italic')
-    ax.text(75, -5, f"{clean_home} ATK HALF", ha='center', va='center',
-            color='white', fontsize=8, alpha=0.5, style='italic')
+    # ── Color cells ───────────────────────────────────────────────────────────
+    cell_w = 100 / COLS
+    cell_h = 100 / ROWS
+
+    for row in range(ROWS):
+        for col in range(COLS):
+            h_pct = home_pct_grid[row, col]
+            h_cnt = int(home_grid[row, col])
+            a_cnt = int(away_grid[row, col])
+
+            if h_pct >= 0.5:
+                # Home dominates → red
+                alpha = 0.15 + 0.55 * (h_pct - 0.5) / 0.5
+                color = TACTIQ_HOME
+            else:
+                # Away dominates → blue
+                alpha = 0.15 + 0.55 * (0.5 - h_pct) / 0.5
+                color = TACTIQ_AWAY
+
+            x0 = x_edges[col] + 0.5
+            y0 = y_edges[row] + 0.5
+            rect = FancyBboxPatch(
+                (x0, y0), cell_w - 1.0, cell_h - 1.0,
+                boxstyle='round,pad=0.8',
+                facecolor=color, edgecolor='none', alpha=alpha, zorder=2
+            )
+            ax_pitch.add_patch(rect)
+
+            # Event count labels
+            cx = x_edges[col] + cell_w / 2
+            cy = y_edges[row] + cell_h / 2
+            ax_pitch.text(cx, cy + 4.5, str(h_cnt),
+                          ha='center', va='center', fontsize=9,
+                          color=TACTIQ_HOME, fontweight='bold', zorder=5)
+            ax_pitch.text(cx, cy - 4.5, str(a_cnt),
+                          ha='center', va='center', fontsize=9,
+                          color=TACTIQ_AWAY, fontweight='bold', zorder=5)
+
+    # Zone column labels
+    col_labels = ['Def Third', 'Def-Mid', 'Mid', 'Att-Mid', 'Att Third']
+    for ci, label in enumerate(col_labels):
+        cx = x_edges[ci] + cell_w / 2
+        ax_pitch.text(cx, -4, label, ha='center', va='top',
+                      fontsize=7.5, color='#888')
+
+    # ── Top bar: overall event split ──────────────────────────────────────────
+    h_total = int(home_grid.sum())
+    a_total = int(away_grid.sum())
+    grand   = h_total + a_total or 1
+    h_share = h_total / grand
+    a_share = a_total / grand
+
+    ax_bar.set_facecolor(TACTIQ_BG)
+    ax_bar.barh([0], [h_share], color=TACTIQ_HOME, height=0.6, edgecolor='none', alpha=0.85)
+    ax_bar.barh([0], [a_share], left=[h_share], color=TACTIQ_AWAY,
+                height=0.6, edgecolor='none', alpha=0.85)
+    ax_bar.text(h_share / 2, 0, f'{clean_home}  {h_share*100:.0f}%',
+                ha='center', va='center', fontsize=11,
+                color='white', fontweight='bold')
+    ax_bar.text(h_share + a_share / 2, 0, f'{a_share*100:.0f}%  {clean_away}',
+                ha='center', va='center', fontsize=11,
+                color='white', fontweight='bold')
+    ax_bar.set_xlim(0, 1)
+    ax_bar.set_ylim(-0.5, 0.5)
+    ax_bar.axis('off')
+    ax_bar.set_title('Pitch Dominance  —  On-Ball Actions per Zone',
+                     color=TACTIQ_FG, fontsize=13, fontweight='bold', pad=6)
+
+    # ── Legend ────────────────────────────────────────────────────────────────
+    ax_pitch.text(2, 103,
+                  f'● {clean_home} (top number)  ● {clean_away} (bottom number)',
+                  ha='left', va='bottom', fontsize=8, color='#aaa')
 
     return fig_to_base64(fig)

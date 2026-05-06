@@ -254,7 +254,7 @@ def layout(match_id=None):
             return base64.b64encode(buf.getvalue()).decode('utf-8')
 
     plots["shot_map"] = safe_plot(visuals.plot_match_shot_map, df, home_team, away_team)
-    plots["territorial_voronoi"] = safe_plot(visuals.plot_territorial_voronoi, df, home_team, away_team)
+    plots["territorial_voronoi"] = safe_plot(visuals.plot_pitch_dominance, df, home_team, away_team)
     
     h_goals = len(df[(df['team_name'] == home_team) & (df['type_id'] == 16)])
     a_goals = len(df[(df['team_name'] == away_team) & (df['type_id'] == 16)])
@@ -276,7 +276,6 @@ def layout(match_id=None):
         plots[f"{team}_def_profile"]     = safe_plot(visuals.plot_defensive_profile, df, team)
         plots[f"{team}_bt_map"]          = safe_plot(bt_visuals.plot_ball_time_map,      bt_data, team)
         plots[f"{team}_bt_bars"]         = safe_plot(bt_visuals.plot_thirds_flanks_bars, bt_data, team)
-        plots[f"{team}_bt_line"]         = safe_plot(bt_visuals.plot_ball_timeline,      bt_data, team)
         plots[f"{team}_obv_pitch"]       = safe_plot(obv_visuals.plot_obv_pitch,         df_obv,  team)
         plots[f"{team}_obv_leaderboard"] = safe_plot(obv_visuals.plot_obv_leaderboard,   df_obv,  team)
 
@@ -395,8 +394,7 @@ def layout(match_id=None):
             ], className="visualization-card", style={"marginBottom": "30px"}),
             html.Div([
                 html.H3("Ball Trace: Flow & Distribution", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "10px"}),
-                html.Img(src=get_img(f'{team_name}_bt_bars'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)", "marginBottom": "20px"}),
-                html.Img(src=get_img(f'{team_name}_bt_line'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)", "marginTop": "10px"}),
+                html.Img(src=get_img(f'{team_name}_bt_bars'), className="plot-img", style={"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"}),
             ], className="visualization-card", style={"marginBottom": "30px"}),
         ], style={"padding": "20px 0"})
 
