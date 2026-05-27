@@ -1,23 +1,22 @@
 """
 Wyscout Loader
 ==============
-Wyscout'tan indirilen Excel dosyalarını okuyup her takım için
-sezon ortalaması hesaplar.
+Reads Wyscout Excel exports and computes per-team season averages.
 
-Her takım için 5 dosya olabilir:
-  Team Stats {team}.xlsx        → baz dosya
-  Team Stats {team} (1).xlsx   → varyant 1
-  Team Stats {team} (2).xlsx   → varyant 2
-  Team Stats {team} (3).xlsx   → varyant 3
-  Team Stats {team} (4).xlsx   → varyant 4
+Up to five files per team:
+  Team Stats {team}.xlsx        → base file
+  Team Stats {team} (1).xlsx   → variant 1
+  Team Stats {team} (2).xlsx   → variant 2
+  Team Stats {team} (3).xlsx   → variant 3
+  Team Stats {team} (4).xlsx   → variant 4
 
-Dosya numaraları takımdan takıma farklı içeriklere karşılık gelebilir.
-Bu yüzden her dosyayı sütun adlarına göre otomatik kategorize ediyoruz.
+File numbers may map to different content across teams, so each file
+is auto-categorised by its column signatures.
 
-Kullanım:
+Usage:
     from utils.wyscout_loader import load_wyscout_team_averages
     df = load_wyscout_team_averages()
-    # Her satır bir takım, kolonlarda sezon ortalamaları
+    # One row per team; columns are season averages
 """
 
 import os
@@ -34,7 +33,7 @@ WYSCOUT_DIR = os.path.join(
     "raw_data", "Wyscout"
 )
 
-# Wyscout dosya adındaki takım listesi
+# Teams whose Wyscout files are present in WYSCOUT_DIR
 WYSCOUT_TEAMS = [
     "Alanyaspor",
     "Antalyaspor",
@@ -56,17 +55,17 @@ WYSCOUT_TEAMS = [
     "İstanbul Başakşehir",
 ]
 
-# ── Dosya tipi tespiti için imza sütunları ──────────────────────────────────
-# Hangi özel sütunun varlığına göre dosya tipi belirlenir
+# ── File-type detection signatures ──────────────────────────────────────────
+# Presence of any signature column identifies the file type
 FILE_TYPE_SIGNATURES = {
+    "summary":   ["Goals", "Possession, %", "Losses / Low / Medium / High"],
     "tempo":     ["PPDA", "Match tempo", "Average passes per possession"],
     "passing":   ["Passes / accurate", "Forward passes / accurate", "Progressive passes / accurate"],
     "defensive": ["Conceded goals", "Shots against / on target", "Interceptions"],
     "attacking": ["xG", "Positional attacks / with shots", "Counterattacks / with shots"],
-    "summary":   ["Goals", "Possession, %", "Losses / Low / Medium / High"],
 }
 
-# ── Sütun yeniden adlandırmaları ────────────────────────────────────────────
+# ── Column renames ───────────────────────────────────────────────────────────
 RENAME_ATTACKING = {
     "xG":                             "xg_for",
     "Shots / on target":              "shots_total",
@@ -166,9 +165,7 @@ TYPE_RENAME_MAP = {
 
 
 def _detect_file_type(df: pd.DataFrame) -> str:
-    """
-    DataFrame sütun adlarına bakarak dosya tipini belirler.
-    """
+    """Identify file type from the column names present in the DataFrame."""
     cols = set(df.columns)
     for ftype, signatures in FILE_TYPE_SIGNATURES.items():
         if any(sig in cols for sig in signatures):
@@ -177,10 +174,7 @@ def _detect_file_type(df: pd.DataFrame) -> str:
 
 
 def _read_and_clean(fpath: str, team_name: str) -> tuple:
-    """
-    Bir Excel dosyasını okur, tipini tespit eder ve temizler.
-    Returns: (file_type: str, df: pd.DataFrame)
-    """
+    """Read one Excel file, detect its type, and filter to Süper Lig rows for the given team."""
     try:
         df = pd.read_excel(fpath, sheet_name="TeamStats")
     except Exception as e:
@@ -189,17 +183,17 @@ def _read_and_clean(fpath: str, team_name: str) -> tuple:
 
     ftype = _detect_file_type(df)
 
-    # İlk 2 satır metadata (takım özeti); Match dolu olanları al
+    # First two rows are summary metadata; keep only per-match rows
     df = df[df["Match"].notna()].copy()
 
-    # Sadece Süper Lig
+    # Süper Lig only
     if "Competition" in df.columns:
         df = df[df["Competition"].str.contains("Süper Lig", na=False)].copy()
 
     if df.empty:
         return ftype, pd.DataFrame()
 
-    # Sadece bu takımın satırları
+    # Keep only rows for this team
     if "Team" in df.columns:
         df = df[df["Team"].str.strip() == team_name].copy()
 
@@ -207,10 +201,7 @@ def _read_and_clean(fpath: str, team_name: str) -> tuple:
 
 
 def _load_team_raw(team_name: str) -> pd.DataFrame:
-    """
-    Bir takım için tüm Wyscout dosyalarını yükler,
-    içerik tipine göre kategorize eder ve tek DataFrame'e birleştirir.
-    """
+    """Load all Wyscout files for one team, categorise by content type, and merge into a single DataFrame."""
     suffixes = ["", " (1)", " (2)", " (3)", " (4)"]
     type_dfs: dict[str, pd.DataFrame] = {}
 
@@ -222,7 +213,7 @@ def _load_team_raw(team_name: str) -> pd.DataFrame:
         ftype, df = _read_and_clean(fpath, team_name)
         if df.empty or ftype == "unknown":
             continue
-        # Her tipte ilk bulduğumuz dosyayı kullan (sayfa numarası fark etmez)
+        # Use the first file found for each type
         if ftype not in type_dfs:
             rename_map = TYPE_RENAME_MAP.get(ftype, {})
             type_dfs[ftype] = df.rename(columns=rename_map)
@@ -231,22 +222,25 @@ def _load_team_raw(team_name: str) -> pd.DataFrame:
     if not type_dfs:
         return pd.DataFrame()
 
-    # Ana DataFrame olarak attacking'i ya da summary'i kullan
+    # Prefer attacking, then summary, as the base DataFrame
     if "attacking" in type_dfs:
         merged = type_dfs["attacking"].copy()
     elif "summary" in type_dfs:
         merged = type_dfs["summary"].copy()
     else:
-        # İlk bulduğumuz her neyse
         merged = next(iter(type_dfs.values())).copy()
 
-    key_cols = ["Match", "Team"]
+    possible_keys = ["Match", "Team"]
 
     for ftype, df_extra in type_dfs.items():
         if df_extra is merged:
             continue
         new_cols = [c for c in df_extra.columns if c not in merged.columns]
         if not new_cols:
+            continue
+        # Only join on keys that exist in both DataFrames
+        key_cols = [c for c in possible_keys if c in df_extra.columns and c in merged.columns]
+        if not key_cols:
             continue
         extra_sub = df_extra[key_cols + new_cols]
         merged = merged.merge(extra_sub, on=key_cols, how="left")
@@ -258,11 +252,10 @@ def _load_team_raw(team_name: str) -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def load_wyscout_team_averages() -> pd.DataFrame:
     """
-    Tüm Wyscout takım dosyalarını yükler ve her takım için
-    sezon ortalamalarını hesaplar.
+    Load all Wyscout team files and compute per-team season averages.
 
     Returns:
-        pd.DataFrame — her satır bir takım, kolonlar sezon ortalamaları:
+        pd.DataFrame — one row per team; columns are season averages:
           wyscout_team, n_matches,
           xg_for, shots_total, shots_on_target_pct,
           goals_conceded, shots_against, defensive_duels_won_pct,
@@ -298,9 +291,7 @@ def load_wyscout_team_averages() -> pd.DataFrame:
 
 
 def load_wyscout_match_level() -> pd.DataFrame:
-    """
-    Tüm takımlar için maç bazlı Wyscout verisini döndürür.
-    """
+    """Return match-level Wyscout data for all teams concatenated."""
     dfs = []
     for team_name in WYSCOUT_TEAMS:
         raw = _load_team_raw(team_name)
@@ -313,32 +304,49 @@ def load_wyscout_match_level() -> pd.DataFrame:
 
 def get_wyscout_match_stats(home_team: str, away_team: str) -> dict:
     """
-    Belirtilen iki takımın karşılaştığı maça ait Wyscout xG ve PPDA değerlerini döndürür.
-    Match sütunu "TeamA - TeamB score" formatındadır; her iki takım adı içinde aranır.
+    Return Wyscout match-level tactical indicators (xG, PPDA, tempo, passes, clearances, etc.)
+    for the match between the two teams.
+    The Match column uses the format "TeamA - TeamB score"; both team names are searched.
 
     Returns:
-        {
-            'home': {'xg': float|None, 'ppda': float|None},
-            'away': {'xg': float|None, 'ppda': float|None},
-        }
+        dict: containing 'home' and 'away' dictionaries with various Wyscout metrics.
     """
     name_map = get_wyscout_team_name_map()
     h_ws = name_map.get(home_team, home_team)
     a_ws = name_map.get(away_team, away_team)
 
+    metrics_list = [
+        # attacking / offensive
+        'xg_for', 'shots_total', 'shots_on_target',
+        'positional_attacks', 'positional_with_shots',
+        'crosses', 'crosses_accurate',
+        # transitions
+        'counterattacks', 'counter_with_shots',
+        # set pieces
+        'corners', 'corners_with_shots',
+        'free_kicks', 'free_kicks_with_shots',
+        # defensive
+        'ppda', 'interceptions', 'clearances',
+        'defensive_duels_won_pct', 'aerial_duels_won_pct', 'fouls',
+        # possession / tempo
+        'pass_accuracy_pct', 'match_tempo', 'avg_passes_per_poss',
+        'progressive_passes', 'final_third_passes', 'possession_pct',
+    ]
+
     result = {
-        'home': {'xg': None, 'ppda': None},
-        'away': {'xg': None, 'ppda': None},
+        'home': {m: None for m in metrics_list},
+        'away': {m: None for m in metrics_list},
     }
 
     def _find_match_row(team_ws: str, other_ws: str, col: str) -> float | None:
         raw = _load_team_raw(team_ws)
         if raw.empty or col not in raw.columns or 'Match' not in raw.columns:
             return None
+        team_col = 'Team' if 'Team' in raw.columns else 'wyscout_team'
         mask = (
             raw['Match'].str.contains(h_ws, case=False, na=False) &
             raw['Match'].str.contains(a_ws, case=False, na=False) &
-            (raw['Team'] == team_ws)
+            (raw[team_col] == team_ws)
         )
         rows = raw[mask]
         if rows.empty:
@@ -346,26 +354,26 @@ def get_wyscout_match_stats(home_team: str, away_team: str) -> dict:
         val = rows.iloc[0][col]
         return round(float(val), 2) if pd.notna(val) else None
 
-    result['home']['xg']   = _find_match_row(h_ws, a_ws, 'xg_for')
-    result['home']['ppda'] = _find_match_row(h_ws, a_ws, 'ppda')
-    result['away']['xg']   = _find_match_row(a_ws, h_ws, 'xg_for')
-    result['away']['ppda'] = _find_match_row(a_ws, h_ws, 'ppda')
+    for m in metrics_list:
+        result['home'][m] = _find_match_row(h_ws, a_ws, m)
+        result['away'][m] = _find_match_row(a_ws, h_ws, m)
+
+    # Maintain backward compatibility
+    result['home']['xg'] = result['home']['xg_for']
+    result['away']['xg'] = result['away']['xg_for']
 
     logger.info(
-        "Wyscout match stats — %s: xG=%s PPDA=%s | %s: xG=%s PPDA=%s",
-        h_ws, result['home']['xg'], result['home']['ppda'],
-        a_ws, result['away']['xg'], result['away']['ppda'],
+        "Wyscout match stats retrieved — %s: xG=%s PPDA=%s | %s: xG=%s PPDA=%s",
+        h_ws, result['home']['xg_for'], result['home']['ppda'],
+        a_ws, result['away']['xg_for'], result['away']['ppda'],
     )
     return result
 
 
 def get_wyscout_team_name_map() -> dict:
-    """
-    Event verisindeki takım adlarını Wyscout takım adlarıyla eşler.
-    Returns: {event_team_name: wyscout_team_name}
-    """
+    """Map event-data team names to Wyscout team names."""
     return {
-        # Wyscout kısa adları
+        # Wyscout short names
         "Alanyaspor":                          "Alanyaspor",
         "Antalyaspor":                         "Antalyaspor",
         "Antalyaspor ":                        "Antalyaspor",
@@ -394,7 +402,7 @@ def get_wyscout_team_name_map() -> dict:
         "İstanbul Başakşehir":                 "İstanbul Başakşehir",
         "Başakşehir":                          "İstanbul Başakşehir",
         "Istanbul Basaksehir":                 "İstanbul Başakşehir",
-        # Opta/event data tam adları
+        # Opta / event-data full names
         "Alanyaspor Kulübü":                   "Alanyaspor",
         "Antalyaspor Kulübü":                  "Antalyaspor",
         "Beşiktaş Jimnastik Kulübü":           "Beşiktaş",

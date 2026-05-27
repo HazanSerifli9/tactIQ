@@ -2,6 +2,7 @@ import os
 from PIL import Image
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from utils.data import TEAM_LOGOS
+from utils.cache import disk_cache
 from shared.logger import get_logger
 
 logger = get_logger(__name__)
@@ -29,6 +30,7 @@ def _plot_logo(ax, team_name, x, y, zoom=0.03):
         except Exception as e:
             logger.debug("Logo render skipped for %s: %s", team_name, e)
 
+@disk_cache
 def generate_zonal_map(grid_data: List[Dict[str, Any]], rows: int = 5, cols: int = 6, league_name: str = "Süper Lig") -> Optional[str]:
     """
     Generate Pitch Map with Top Player annotations per zone.

@@ -4,7 +4,9 @@ import numpy as np
 import os
 from typing import Dict, Any
 from utils.data import get_data_dir
+from utils.cache import disk_cache
 
+@disk_cache
 def process_impact_data(league: str = "Süper Lig", year: str = "2024", min_mins: int = 400) -> pd.DataFrame:
     """
     Calculate Player Impact Metrics quantifying Team Performance ON vs OFF the pitch.

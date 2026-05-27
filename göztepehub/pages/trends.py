@@ -2,9 +2,9 @@ import dash
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
 from utils.data import extract_fixture_data, calculate_standings
-from utils.recipient_analysis import get_goztepe_players, get_recipient_analysis
-from utils.pitch import draw_pitch
-from utils.why_we_lose import calc_why_we_lose
+from göztepehub.utils.recipient_analysis import get_goztepe_players, get_recipient_analysis
+from göztepehub.utils.pitch import draw_pitch
+from göztepehub.utils.why_we_lose import calc_why_we_lose
 import plotly.graph_objects as go
 import numpy as np
 

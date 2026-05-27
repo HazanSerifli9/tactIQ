@@ -64,6 +64,35 @@ RIVAL_FILES = {
     ],
 }
 
+
+def _discover_rivals():
+    """Build rival options from the parquet data, keeping the famous-five labels first."""
+    discovered = {}
+    data_dir = get_data_dir()
+    try:
+        filenames = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
+    except Exception:
+        filenames = []
+
+    for filename in filenames:
+        try:
+            df = pd.read_parquet(os.path.join(data_dir, filename), columns=['team_name'])
+        except Exception:
+            try:
+                df = pd.read_parquet(os.path.join(data_dir, filename))
+            except Exception:
+                continue
+        if 'team_name' not in df.columns:
+            continue
+        for team in df['team_name'].dropna().unique():
+            if team != GOZTEPE:
+                discovered[_short(team)] = team
+
+    ordered = dict(RIVALS)
+    for label in sorted(discovered):
+        ordered.setdefault(label, discovered[label])
+    return ordered
+
 _SUFFIXES = [
     'Spor Kulübü', 'Futbol Kulübü', 'Jimnastik Kulübü', 'Kulübü',
     'Spor A.Ş.', 'A.Ş.', 'S.K.', 'F.K.', 'SK', 'Jimnastik',
@@ -113,20 +142,36 @@ _MATCH_CACHE: dict = {}
 # ════════════════════════════════════════════════════════════════
 
 def _load_rival_matches(team_name: str) -> list:
-    """Return list of (filename, df) for the hardcoded 5 matches for this team."""
+    """Return list of (filename, df) for this team, preferring curated files when present."""
     if team_name in _MATCH_CACHE:
         return _MATCH_CACHE[team_name]
 
     data_dir  = get_data_dir()
     filenames = RIVAL_FILES.get(team_name, [])
     matches   = []
+
+    if not filenames:
+        try:
+            filenames = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
+        except Exception:
+            filenames = []
+
     for filename in filenames:
         path = os.path.join(data_dir, filename)
         try:
             df = pd.read_parquet(path)
-            matches.append((filename, df))
+            if 'team_name' in df.columns and team_name in df['team_name'].unique():
+                matches.append((filename, df))
         except Exception:
             continue
+
+    def sort_key(item):
+        _, df = item
+        week = int(df['week'].iloc[0]) if 'week' in df.columns and not df.empty else 0
+        date = str(df['local_date'].iloc[0]) if 'local_date' in df.columns and not df.empty else ''
+        return (week, date)
+
+    matches = sorted(matches, key=sort_key, reverse=True)[:5]
 
     _MATCH_CACHE[team_name] = matches
     return matches
@@ -1772,7 +1817,9 @@ def _feasibility_note():
 # ════════════════════════════════════════════════════════════════
 
 def layout():
-    rival_options = [{'label': label, 'value': label} for label in RIVALS]
+    rivals = _discover_rivals()
+    default_value = next(iter(rivals.values()), None)
+    rival_options = [{'label': label, 'value': value} for label, value in rivals.items()]
     tab_options   = [
         {'label': '⚔️  Offensive',   'value': 'off'},
         {'label': '🛡  Defensive',    'value': 'def'},
@@ -1786,16 +1833,17 @@ def layout():
             html.Div(className='goz-hero-content', children=[
                 dcc.Link('← GÖZTEPE HUB', href='/', className='goz-back-link'),
                 html.H1('RIVAL SCOUT', className='goz-hub-title'),
-                html.P('Per-match deep dive · Galatasaray · Fenerbahçe · Beşiktaş · Trabzonspor · Başakşehir',
+                html.P('Per-match deep dive from the latest available event-data sample',
                        className='goz-hub-subtitle'),
                 html.Div(style={'marginTop': '24px', 'width': '100%', 'maxWidth': '380px'}, children=[
                     html.Label('SELECT RIVAL', className='goz-label'),
                     dcc.Dropdown(
                         id='scout-rival-selector',
                         options=rival_options,
-                        value='Galatasaray',
+                        value=default_value,
                         className='goz-dropdown',
                         clearable=False,
+                        searchable=True,
                     ),
                 ]),
             ]),
@@ -1849,7 +1897,7 @@ def layout():
 )
 def update_match_options(rival_label):
     """Populate the match selector whenever the rival changes."""
-    team_name = RIVALS.get(rival_label or '', '')
+    team_name = rival_label or ''
     if not team_name:
         return html.Div()
 
@@ -1899,7 +1947,7 @@ def update_scout_content(rival_label, selected_file, active_tab):
     if not rival_label or not selected_file:
         return html.Div(), html.Div()
 
-    team_name = RIVALS.get(rival_label, '')
+    team_name = rival_label or ''
     if not team_name:
         return html.Div(), html.Div()
 
@@ -1912,12 +1960,13 @@ def update_scout_content(rival_label, selected_file, active_tab):
     fname, df   = match_pair[0]
     single      = [(fname, df)]          # analysis functions accept a list
 
-    match_card = _build_selected_match_card(fname, df, team_name, rival_label)
+    rival_display = _short(team_name)
+    match_card = _build_selected_match_card(fname, df, team_name, rival_display)
 
-    if   active_tab == 'off':   content = _build_offensive(single, team_name, rival_label)
-    elif active_tab == 'def':   content = _build_defensive(single, team_name, rival_label)
-    elif active_tab == 'trans': content = _build_transitions(single, team_name, rival_label)
-    elif active_tab == 'shots': content = _build_shot_profile(single, team_name, rival_label)
+    if   active_tab == 'off':   content = _build_offensive(single, team_name, rival_display)
+    elif active_tab == 'def':   content = _build_defensive(single, team_name, rival_display)
+    elif active_tab == 'trans': content = _build_transitions(single, team_name, rival_display)
+    elif active_tab == 'shots': content = _build_shot_profile(single, team_name, rival_display)
     elif active_tab == 'info':  content = _feasibility_note()
     else:                       content = html.Div()
 

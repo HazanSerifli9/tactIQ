@@ -17,8 +17,16 @@ from dash import Dash, html, dcc
 import dash_bootstrap_components as dbc
 
 FONT_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Oswald:wght@500;700&display=swap"
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
-app = Dash(__name__, use_pages=True, suppress_callback_exceptions=True, external_stylesheets=[dbc.themes.DARKLY, FONT_URL])
+app = Dash(
+    __name__,
+    use_pages=True,
+    pages_folder=os.path.join(_APP_DIR, "pages"),
+    assets_folder=os.path.join(_APP_DIR, "assets"),
+    suppress_callback_exceptions=True,
+    external_stylesheets=[dbc.themes.DARKLY, FONT_URL],
+)
 app.title = "Göztepe Hub"
 server = app.server
 

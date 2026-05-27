@@ -545,7 +545,7 @@ def _build_h2h_section(rival, opp_name):
             ]),
             dbc.Row(style={"marginTop": "20px"}, children=[
                 dbc.Col([
-                    html.Div("PRESSING HARİTASI", style={"fontSize": "0.72rem", "fontWeight": "700",
+                    html.Div("PRESSING MAP", style={"fontSize": "0.72rem", "fontWeight": "700",
                         "color": GOLD, "letterSpacing": "1px", "marginBottom": "6px",
                         "textAlign": "center"}),
                     html.Img(src=_build_pressing_map(goz_df, opp_df, goz_short, opp_name),
@@ -557,7 +557,7 @@ def _build_h2h_section(rival, opp_name):
                     html.Div("BOX ENTRY MAP", style={"fontSize": "0.72rem", "fontWeight": "700",
                         "color": GOLD, "letterSpacing": "1px", "marginBottom": "3px",
                         "textAlign": "center"}),
-                    html.Div("Pass başlangıç noktaları · Gold = ground · Blue = cross",
+                    html.Div("Pass start positions · Gold = ground · Blue = cross",
                              style={"fontSize": "0.58rem", "color": "rgba(255,255,255,0.3)",
                                     "textAlign": "center", "marginBottom": "6px"}),
                     html.Img(src=_build_box_entry_map(goz_df, opp_df, goz_short, opp_name),
@@ -833,7 +833,7 @@ def _build_xg_timeline(goz_df, opp_df, goz_short, opp_name):
             range=[0, max_min + 2], tickfont=dict(size=9),
         ),
         yaxis=dict(
-            title='Kümülatif xG', color='rgba(255,255,255,0.5)',
+            title='Cumulative xG', color='rgba(255,255,255,0.5)',
             showgrid=True, gridcolor='rgba(255,255,255,0.07)',
             zeroline=False, tickfont=dict(size=9), rangemode='tozero',
         ),
@@ -908,8 +908,8 @@ def _build_pressing_map(goz_df, opp_df, goz_short, opp_name):
     fig.patch.set_facecolor(PITCH_BG)
 
     for ax, team_p, cmap, label in [
-        (axes[0], goz_p, 'YlOrBr', f'Göztepe — {len(goz_p)} pressing aksiyonu'),
-        (axes[1], opp_p, 'Reds',   f'{opp_name} — {len(opp_p)} pressing aksiyonu'),
+        (axes[0], goz_p, 'YlOrBr', f'Göztepe — {len(goz_p)} pressing actions'),
+        (axes[1], opp_p, 'Reds',   f'{opp_name} — {len(opp_p)} pressing actions'),
     ]:
         ax.set_facecolor(PITCH_BG)
         ax.set_title(label, color='white', fontsize=9, pad=5, fontweight='bold')
@@ -1059,7 +1059,7 @@ def layout():
                         className="goz-dropdown",
                         clearable=False,
                         searchable=True,
-                        placeholder="Rakip seçiniz...",
+                        placeholder="Select opponent...",
                     ),
                 ]),
             ]),
@@ -1088,11 +1088,10 @@ def layout():
      Output('post-match-form-container', 'children'),
      Output('post-match-h2h-container', 'children')],
     [Input('post-match-rival-selector', 'value')],
-    prevent_initial_call=True
 )
 def update_post_match(rival):
     if not rival:
-        return [html.Div("Rakip seçiniz", className="goz-card-desc")] * 3
+        return [html.Div("Select an opponent", className="goz-card-desc")] * 3
 
     cache_key = f"postmatch_{rival}_{int(time.time()//300)}"
     if cache_key in _POST_MATCH_CACHE:
@@ -1110,7 +1109,7 @@ def update_post_match(rival):
         return result
     except Exception as e:
         error_msg = html.Div([
-            html.Div("⚠️ Veri yüklenemedi", className="goz-card-title"),
-            html.P(f"Teknik hata: {str(e)}", className="goz-card-desc")
+            html.Div("⚠️ Data could not be loaded", className="goz-card-title"),
+            html.P(f"Technical error: {str(e)}", className="goz-card-desc")
         ], className="goz-form-section")
         return [error_msg] * 3

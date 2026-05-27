@@ -10,6 +10,7 @@ import os
 from PIL import Image
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from utils.data import TEAM_LOGOS
+from utils.cache import disk_cache
 
 # Theme
 TACTIQ_BG = "#1e1e1e"
@@ -17,6 +18,7 @@ TACTIQ_TEXT = "#ffffff"
 TACTIQ_POS = "#00ff87" 
 TACTIQ_NEG = "#ff0055" 
 
+@disk_cache
 def generate_impact_chart(df: pd.DataFrame, metric: str = 'creation', top_n: int = 10, league_name: str = "Süper Lig") -> Optional[str]:
     """
     Generate Diverging Bar Chart for Player Impact.

@@ -12,6 +12,7 @@ from matplotlib.lines import Line2D
 import os
 from PIL import Image
 from utils.data import TEAM_LOGOS
+from utils.cache import disk_cache
 from shared.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +43,7 @@ def _plot_logo(ax, team_name: str):
         except Exception as e:
             logger.debug("Logo render skipped for %s: %s", team_name, e)
 
+@disk_cache
 def generate_carry_plot(summary_df: pd.DataFrame, carry_details: Dict[str, List[Dict[str, Any]]], league_name="Süper Lig", year="2024") -> Optional[str]:
     """Generate a 4x3 subplot grid of top progressive carriers."""
     if summary_df.empty: return None

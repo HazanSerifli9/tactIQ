@@ -4,6 +4,7 @@ import numpy as np
 import os
 from typing import Tuple, Dict, Any, List
 from utils.data import get_data_dir
+from utils.cache import disk_cache
 from shared.logger import get_logger
 
 logger = get_logger(__name__)
@@ -11,6 +12,7 @@ logger = get_logger(__name__)
 def calculate_distance(x1, y1, x2, y2):
     return np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
+@disk_cache
 def process_carry_data(league: str = "Süper Lig", year: str = "2024", min_distance: float = 3.0, max_time: float = 10.0) -> Tuple[pd.DataFrame, Dict[str, List[Dict[str, Any]]]]:
     """
     Infer 'Carry' events from sequential data.

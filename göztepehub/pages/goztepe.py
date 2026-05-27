@@ -3,7 +3,7 @@ from dash import html, dcc
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from utils.data import extract_fixture_data, calculate_standings
-from utils.why_we_lose import calc_why_we_lose
+from göztepehub.utils.why_we_lose import calc_why_we_lose
 
 dash.register_page(__name__, path='/', title='TactIQ | Göztepe Hub')
 
@@ -290,4 +290,3 @@ def layout():
             ),
         ],
     )
-

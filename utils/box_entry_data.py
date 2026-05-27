@@ -4,7 +4,9 @@ import numpy as np
 import os
 from typing import List, Dict, Any, Optional
 from utils.data import get_data_dir
+from utils.cache import disk_cache
 
+@disk_cache
 def process_box_entry_data(league: str = "Süper Lig", year: str = "2024") -> List[Dict[str, Any]]:
     """
     Identify Top 20 players by Box Entries and extract their event coordinates.

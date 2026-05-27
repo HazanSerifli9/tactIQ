@@ -1,22 +1,12 @@
 
 import dash
-from dash import html, dcc, Input, Output, State, ALL, callback, MATCH
+from dash import html, dcc
 import dash_bootstrap_components as dbc
 from utils.data import extract_fixture_data
 
 dash.register_page(__name__, path='/fixtures', title='TactIQ | Fixtures')
 
 def layout():
-    matches = extract_fixture_data()
-    weeks = {}
-    for m in matches:
-        w = m['week']
-        if w not in weeks:
-            weeks[w] = []
-        weeks[w].append(m)
-
-    sorted_weeks = sorted(weeks.keys())
-
     content = []
     
     content.append(html.Header([
@@ -33,7 +23,24 @@ def layout():
         )
     ], id="stats-modal", size="lg", is_open=False, centered=True)
     content.append(modal)
+    
+    content.extend(_fixture_sections())
 
+    return html.Div(content, className="container", style={"maxWidth": "1200px", "margin": "0 auto", "padding": "20px"})
+
+
+def _fixture_sections():
+    matches = extract_fixture_data()
+
+    weeks = {}
+    for m in matches:
+        w = m['week']
+        if w not in weeks:
+            weeks[w] = []
+        weeks[w].append(m)
+
+    sorted_weeks = sorted(weeks.keys())
+    content = []
     for week in sorted_weeks:
         content.append(html.H2(f"Week {week}", style={"borderLeft": "4px solid var(--accent-color)", "paddingLeft": "15px", "margin": "40px 0 20px"}))
         
@@ -104,5 +111,6 @@ def layout():
         grid.children = cards
         content.append(grid)
 
-    return html.Div(content, className="container", style={"maxWidth": "1200px", "margin": "0 auto", "padding": "20px"})
-
+    if not content:
+        return html.Div("No matches found.", style={"color": "var(--text-secondary)", "textAlign": "center", "padding": "40px"})
+    return content

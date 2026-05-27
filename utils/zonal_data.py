@@ -5,7 +5,9 @@ import os
 from typing import List, Dict, Tuple, Any
 from utils.data import get_data_dir
 from utils.xt_data import calculate_xt_for_events
+from utils.cache import disk_cache
 
+@disk_cache
 def process_zonal_data(league: str = "Süper Lig", year: str = "2024", min_mins: int = 300) -> Tuple[List[Dict[str, Any]], int, int]:
     """
     Identify the top threat creator in each zone of a 6x5 pitch grid.

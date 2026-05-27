@@ -1067,7 +1067,7 @@ def update_pre_match(opponent, active_tab):
         tab_content = _build_def_transitions_analysis(opponent, opp_name)
     else:
         tab_content = html.Div(className="goz-form-section", children=[
-            html.Div(f"{TAB_LABELS[active_tab]} detaylı analiz yakında.", className="goz-card-desc")
+            html.Div(f"{TAB_LABELS[active_tab]} detailed analysis coming soon.", className="goz-card-desc")
         ])
 
     return kpi_container, tab_content
