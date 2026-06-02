@@ -2,7 +2,6 @@
 import pandas as pd
 import numpy as np
 import os
-import threading
 
 from utils.data import get_data_dir
 
@@ -20,9 +19,6 @@ SKIP_EVENTS = {
 SHOT_EVENTS = {'Goal', 'Miss', 'Saved Shot', 'Post'}
 END_EVENTS = SHOT_EVENTS | {'Out', 'Offside Pass', 'Foul throw-in'}
 
-# Cache for loaded match data
-_OPPONENT_MATCHES_CACHE = {}
-
 # Cache for fully-analyzed buildup results (expensive computation)
 _BUILDUP_ANALYSIS_CACHE = {}
 
@@ -32,27 +28,8 @@ def _load_opponent_matches(team_name):
     Load all parquet files where `team_name` plays, EXCLUDING Göztepe matches.
     Returns list of (filename, DataFrame) tuples.
     """
-    if team_name in _OPPONENT_MATCHES_CACHE:
-        return _OPPONENT_MATCHES_CACHE[team_name]
-
-    data_dir = get_data_dir()
-    files = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
-
-    match_dfs = []
-    for filename in files:
-        try:
-            df = pd.read_parquet(os.path.join(data_dir, filename))
-            if 'team_name' not in df.columns:
-                continue
-            teams_in_match = df['team_name'].unique().tolist()
-            # Team must be in match, but Göztepe must NOT be
-            if team_name in teams_in_match and GOZTEPE not in teams_in_match:
-                match_dfs.append((filename, df))
-        except Exception:
-            continue
-
-    _OPPONENT_MATCHES_CACHE[team_name] = match_dfs
-    return match_dfs
+    from göztepehub.utils.transitions_analysis import _load_opponent_matches as load_matches
+    return load_matches(team_name)
 
 
 def _get_zone(y):
@@ -129,7 +106,7 @@ def _analyze_buildup_sequence(seq):
                 pass_type = 'Long'
             break
 
-    # Track the 15-second window
+    # Track the 10-second window
     reached_f3 = False
     had_shot = False
     shot_on_target = False
@@ -140,7 +117,7 @@ def _analyze_buildup_sequence(seq):
         ev_time = ev['time_min'] * 60 + ev['time_sec']
         elapsed = ev_time - start_time
 
-        if elapsed <= 15:
+        if elapsed <= 10:
             events_in_window.append(ev)
             if ev['x'] > 66.6:
                 reached_f3 = True
@@ -166,7 +143,7 @@ def _analyze_buildup_sequence(seq):
         'start_y': start_y,
         'zone': zone,
         'pass_type': pass_type,
-        'duration': min(full_duration, 15),
+        'duration': min(full_duration, 10),
         'events_count': len(events_in_window),
         'reached_f3': reached_f3,
         'had_shot': had_shot,
@@ -185,7 +162,7 @@ def _analyze_buildup_sequence(seq):
 def _analyze_post_turnover(df, team_name, seq):
     """
     After a turnover at the end of a sequence, check if the opponent
-    reaches the team's final third (opponent x > 66.6) within 15 seconds.
+    reaches the team's final third (opponent x > 66.6) within 10 seconds.
     """
     if not seq:
         return False
@@ -206,7 +183,7 @@ def _analyze_post_turnover(df, team_name, seq):
     subsequent = df.loc[turnover_idx + 1:]
     for row in subsequent.to_dict('records'):
         ev_time = row['time_min'] * 60 + row['time_sec']
-        if ev_time - turnover_time > 15:
+        if ev_time - turnover_time > 10:
             break
         if row['team_name'] != team_name and row['x'] > 66.6:
             return True
@@ -408,7 +385,28 @@ def analyze_buildup_for_match(df, team_name):
     Analyze all build-up sequences for a team in a single match.
     Returns a summary dict.
     """
-    records = df.to_dict('records')
+    df_clean = df.copy()
+    flip = False
+    if 'team_position' in df_clean.columns:
+        pos_series = df_clean[df_clean['team_name'] == team_name]['team_position']
+        if not pos_series.empty and pos_series.iloc[0] == 'away':
+            flip = True
+
+    if flip:
+        df_clean['x'] = 100.0 - df_clean['x']
+        df_clean['y'] = 100.0 - df_clean['y']
+        if 'Pass End X' in df_clean.columns:
+            try:
+                df_clean['Pass End X'] = 100.0 - pd.to_numeric(df_clean['Pass End X'], errors='coerce')
+            except Exception:
+                pass
+        if 'Pass End Y' in df_clean.columns:
+            try:
+                df_clean['Pass End Y'] = 100.0 - pd.to_numeric(df_clean['Pass End Y'], errors='coerce')
+            except Exception:
+                pass
+
+    records = df_clean.to_dict('records')
     seq_with_idx = _extract_possession_sequences(records, team_name)
 
     # First pass: analyze each sequence, collecting (result, end_record_idx)
@@ -429,9 +427,11 @@ def analyze_buildup_for_match(df, team_name):
         for j in range(end_idx + 1, len(records)):
             ev = records[j]
             ev_time = ev['time_min'] * 60 + ev['time_sec']
-            if ev_time - turnover_time > 15:
+            if ev_time - turnover_time > 10:
                 break
-            if ev['team_name'] != team_name and (ev['x'] > 66.6 or ev['event'] in SHOT_EVENTS):
+            # Since coordinate flipping ensures the analyzed team always attacks left-to-right (0->100),
+            # the defending goal is at x=0. Opponent entering defensive third means opponent x < 33.3.
+            if ev['team_name'] != team_name and (ev['x'] < 33.3 or ev['event'] in SHOT_EVENTS):
                 danger_indices.add(i)
                 break
 
@@ -454,7 +454,7 @@ def analyze_buildup_for_match(df, team_name):
     center_count = sum(1 for b in buildups if b['zone'] == 'Center')
     right_count = sum(1 for b in buildups if b['zone'] == 'Right')
 
-    # 15s outcomes
+    # 10s outcomes
     f3_entries = sum(1 for b in buildups if b['reached_f3'])
     shots = sum(1 for b in buildups if b['had_shot'])
     sot = sum(1 for b in buildups if b['shot_on_target'])
@@ -500,7 +500,7 @@ def analyze_buildup_for_match(df, team_name):
             'left': left_count, 'center': center_count, 'right': right_count,
             'left_pct': pct(left_count), 'center_pct': pct(center_count), 'right_pct': pct(right_count),
         },
-        'outcomes_15s': {
+        'outcomes_10s': {
             'f3_entry': f3_entries, 'f3_entry_pct': pct(f3_entries),
             'shot': shots, 'shot_pct': pct(shots),
             'sot': sot, 'sot_pct': pct(sot),
@@ -551,12 +551,16 @@ def get_opponent_buildup_analysis(team_name):
     total_left = sum(m['zone']['left'] for m in match_analyses)
     total_center = sum(m['zone']['center'] for m in match_analyses)
     total_right = sum(m['zone']['right'] for m in match_analyses)
-    total_f3 = sum(m['outcomes_15s']['f3_entry'] for m in match_analyses)
-    total_shots = sum(m['outcomes_15s']['shot'] for m in match_analyses)
-    total_sot = sum(m['outcomes_15s']['sot'] for m in match_analyses)
-    total_goals = sum(m['outcomes_15s']['goal'] for m in match_analyses)
-    total_turnovers = sum(m['outcomes_15s']['turnover'] for m in match_analyses)
-    total_opp_danger = sum(m['outcomes_15s']['opp_danger'] for m in match_analyses)
+    total_f3 = sum(m['outcomes_10s']['f3_entry'] for m in match_analyses)
+    total_shots = sum(m['outcomes_10s']['shot'] for m in match_analyses)
+    total_sot = sum(m['outcomes_10s']['sot'] for m in match_analyses)
+    total_goals = sum(m['outcomes_10s']['goal'] for m in match_analyses)
+    total_turnovers = sum(m['outcomes_10s']['turnover'] for m in match_analyses)
+    total_opp_danger = sum(m['outcomes_10s']['opp_danger'] for m in match_analyses)
+    season_f3_entries = []
+    for m in match_analyses:
+        f3_stats = m.get('f3_entry_stats') or {}
+        season_f3_entries.extend(f3_stats.get('entry_coords', []))
 
     def pct(n):
         return round((n / total_buildups) * 100, 1) if total_buildups > 0 else 0
@@ -571,13 +575,23 @@ def get_opponent_buildup_analysis(team_name):
         'zone': {
             'left_pct': pct(total_left), 'center_pct': pct(total_center), 'right_pct': pct(total_right),
         },
-        'outcomes_15s': {
+        'outcomes_10s': {
+            'f3_entry': total_f3,
             'f3_entry_pct': pct(total_f3),
+            'shot': total_shots,
             'shot_pct': pct(total_shots),
+            'sot': total_sot,
             'sot_pct': pct(total_sot),
+            'goal': total_goals,
             'goal_pct': pct(total_goals),
+            'turnover': total_turnovers,
             'turnover_pct': pct(total_turnovers),
+            'opp_danger': total_opp_danger,
             'opp_danger_pct': pct(total_opp_danger),
+        },
+        'f3_entry_stats': {
+            'total_entries': len(season_f3_entries),
+            'entry_coords': season_f3_entries,
         },
         'coords': all_coords,
     }
@@ -644,5 +658,5 @@ def _precompute_all_teams():
         pass
 
 
-_precompute_thread = threading.Thread(target=_precompute_all_teams, daemon=True)
-_precompute_thread.start()
+# Keep analysis on-demand. Eagerly processing every club delays the selected
+# opponent on the pre-match page and duplicates the league benchmark warm-up.

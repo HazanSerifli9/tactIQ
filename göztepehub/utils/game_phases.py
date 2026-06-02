@@ -363,6 +363,53 @@ def calc_offensive_transition_metrics(team_name):
 
 
 # ============================================================
+# SET PIECES METRICS
+# ============================================================
+
+def calc_set_piece_metrics(team_name):
+    all_events, match_count = _load_all_team_events(team_name)
+    if all_events.empty or match_count == 0:
+        return {}
+    
+    team_events = all_events[all_events['team_name'] == team_name]
+    opp_events = all_events[all_events['team_name'] != team_name]
+    
+    # 1. Corners (type_id 6)
+    corners = len(team_events[team_events['type_id'] == 6])
+    opp_corners = len(opp_events[opp_events['type_id'] == 6])
+    
+    # 2. Set piece shots
+    has_sp_col = 'Set piece' in team_events.columns
+    if has_sp_col:
+        sp_shots = len(team_events[(team_events['type_id'].isin([13,14,15,16])) & (team_events['Set piece'] == 'Si')])
+        opp_sp_shots = len(opp_events[(opp_events['type_id'].isin([13,14,15,16])) & (opp_events['Set piece'] == 'Si')])
+        sp_goals = len(team_events[(team_events['type_id'] == 16) & (team_events['Set piece'] == 'Si')])
+        opp_sp_goals = len(opp_events[(opp_events['type_id'] == 16) & (opp_events['Set piece'] == 'Si')])
+    else:
+        sp_shots = 0
+        opp_sp_shots = 0
+        sp_goals = 0
+        opp_sp_goals = 0
+
+    # 3. Penalties
+    has_penalty_col = 'Penalty' in team_events.columns
+    if has_penalty_col:
+        pen_goals = len(team_events[(team_events['type_id'] == 16) & (team_events['Penalty'] == 'Si')])
+    else:
+        pen_goals = 0
+        
+    return {
+        'Corners Won / Game': _safe_div(corners, match_count),
+        'Set Piece Shots / Game': _safe_div(sp_shots, match_count),
+        'Set Piece Goals': sp_goals,
+        'Penalty Goals': pen_goals,
+        'Corners Conceded / Game': _safe_div(opp_corners, match_count),
+        'Set Piece Shots Conceded / Game': _safe_div(opp_sp_shots, match_count),
+        'Set Piece Goals Conceded': opp_sp_goals,
+    }
+
+
+# ============================================================
 # MASTER FUNCTION
 # ============================================================
 
@@ -371,11 +418,13 @@ PHASE_CALCULATORS = {
     'Def. Transitions': calc_defensive_transition_metrics,
     'Offensive': calc_offensive_metrics,
     'Off. Transitions': calc_offensive_transition_metrics,
+    'Set Pieces': calc_set_piece_metrics,
 }
 
 # Metrics where LOWER is better for that team
 LOWER_IS_BETTER = {
     'Goals Conceded / Game', 'xGA / Game', 'PPDA',
+    'Corners Conceded / Game', 'Set Piece Shots Conceded / Game', 'Set Piece Goals Conceded',
 }
 
 def get_phase_metrics(phase_name, team_name):

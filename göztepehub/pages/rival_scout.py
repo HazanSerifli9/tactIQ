@@ -838,6 +838,50 @@ def _compute_transitions(matches, team_name):
     }
 
 
+def _compute_set_pieces(matches, team_name):
+    corners = 0
+    fks = 0
+    penalties = 0
+    sp_shots = 0
+    sp_goals = 0
+    sp_shot_coords = []
+
+    for _, df in matches:
+        team = df[df['team_name'] == team_name]
+
+        # Corners (type_id == 6)
+        corners += len(team[team['type_id'] == 6])
+
+        # Free kicks (where event contains free kick)
+        fks += len(team[team['event'].astype(str).str.lower().str.contains('free kick')])
+
+        # Shots
+        shots = team[team['event'].isin(SHOT_EVENTS)]
+        for _, row in shots.iterrows():
+            is_sp = any(pd.notna(row.get(c)) for c in ['Set piece', 'Free kick', 'From corner']) or row.get('event') == 'Penalty' or row.get('type_id') == 9
+            if is_sp:
+                sp_shots += 1
+                if row.get('event') == 'Goal':
+                    sp_goals += 1
+                if row.get('type_id') == 9:
+                    penalties += 1
+                sp_shot_coords.append({
+                    'x': float(row['x']),
+                    'y': float(row['y']),
+                    'event': row['event']
+                })
+
+    n = max(len(matches), 1)
+    return {
+        'corners_pg': round(corners / n, 1),
+        'fks_pg': round(fks / n, 1),
+        'penalties': penalties,
+        'sp_shots_pg': round(sp_shots / n, 1),
+        'sp_goals': sp_goals,
+        'coords': sp_shot_coords
+    }
+
+
 # ════════════════════════════════════════════════════════════════
 # PITCH / VISUAL HELPERS
 # ════════════════════════════════════════════════════════════════
@@ -1557,7 +1601,7 @@ def _build_defensive(matches, team_name, rival_label):
 # TRANSITIONS TAB
 # ════════════════════════════════════════════════════════════════
 
-def _build_transitions(matches, team_name, rival_label):
+def _build_off_transitions(matches, team_name, rival_label):
     sections = []
     try:
         tr = _compute_transitions(matches, team_name)
@@ -1604,6 +1648,19 @@ def _build_transitions(matches, team_name, rival_label):
             ]),
             title=f'{rival_label} — Attacking Transitions (Ball Wins)', icon='⚡'
         ))
+
+    except Exception:
+        pass
+
+    return html.Div(sections) if sections else html.Div(className='goz-form-section', children=[
+        html.Div('No transition data available.', className='goz-card-desc')
+    ])
+
+
+def _build_def_transitions(matches, team_name, rival_label):
+    sections = []
+    try:
+        tr = _compute_transitions(matches, team_name)
 
         # ── Ball Losses (Defensive Transitions) ───────────────
         p_l, fig_l, ax_l = _make_pitch()
@@ -1656,160 +1713,65 @@ def _build_transitions(matches, team_name, rival_label):
     ])
 
 
-# ════════════════════════════════════════════════════════════════
-# SHOT PROFILE TAB (comprehensive)
-# ════════════════════════════════════════════════════════════════
-
-def _build_shot_profile(matches, team_name, rival_label):
+def _build_set_pieces(matches, team_name, rival_label):
     sections = []
     try:
-        so = _compute_shot_origin(matches, team_name)
+        sp = _compute_set_pieces(matches, team_name)
 
-        # Full shot map
+        # Plot Set Piece Shot Map
         p, fig, ax = _make_pitch(half=True, figsize=(11, 7))
-        EV_STYLE = {
-            'Goal':       (GOLD,                60, '*'),
-            'Saved Shot': (GREEN,               45, 'o'),
-            'Post':       (PURPLE,              40, 'D'),
-            'Miss':       ((1, 1, 1, 0.2),      25, 'o'),
-        }
-        for ev, (color, size, marker) in EV_STYLE.items():
-            pts = [c for c in so['coords'] if c['event'] == ev]
-            if pts:
-                p.scatter([c['x'] for c in pts], [c['y'] for c in pts],
-                          ax=ax, color=color, s=size, alpha=0.85,
-                          marker=marker, label=ev,
-                          edgecolors=(1, 1, 1, 0.1), linewidths=0.4)
-        _legend(ax)
-        img = _fig_b64(fig)
+
+        coords = sp['coords']
+        if coords:
+            for ev, color, marker, label in [
+                ('Goal', GOLD, '*', 'Goal'),
+                ('Saved Shot', GREEN, 'o', 'On Target'),
+                ('Miss', (1, 1, 1, 0.3), 'o', 'Off Target'),
+                ('Post', PURPLE, 'D', 'Post')
+            ]:
+                pts = [c for c in coords if c['event'] == ev]
+                if pts:
+                    p.scatter([c['x'] for c in pts], [c['y'] for c in pts],
+                              ax=ax, color=color, s=50, alpha=0.85,
+                              marker=marker, label=label,
+                              edgecolors=(1,1,1,0.1), linewidths=0.4)
+            _legend(ax)
+        img_b64 = _fig_b64(fig)
 
         sections.append(_card(
             dbc.Row([
                 dbc.Col([
                     html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
-                        _pill('Shots / Game',   so['total_pg'],             GOLD),
-                        _pill('On Target %',    f"{so['on_target_pct']}%",  GREEN),
-                        _pill('Goals / Game',   so['goals_pg'],             ORANGE),
-                        _pill('Header %',       f"{so['header_pct']}%",     BLUE),
+                        _pill('Corners / Game', sp['corners_pg'], GOLD),
+                        _pill('FKs / Game', sp['fks_pg'], BLUE),
+                        _pill('Penalties', sp['penalties'], RED),
+                        _pill('SP Goals', sp['sp_goals'], GREEN),
                     ]),
-                    html.Div('SHOT ORIGIN', style={
+                    html.Div('SET PIECE METRICS', style={
                         'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
                         'letterSpacing': '1px', 'marginBottom': '8px',
                     }),
-                    _bar('Open Play / Frontal', so['origins']['open_play'],  GOLD),
-                    _bar('From Cross',           so['origins']['cross'],      BLUE),
-                    _bar('Set Piece',            so['origins']['set_piece'],  RED),
-                    _bar('Fast Break',           so['origins']['fast_break'], PURPLE),
-                    html.Div(style={'marginTop': '12px'}, children=[
-                        html.Div('SHOT ZONE', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _bar('Small Box (6-yd area)', so['zones']['small_box'],   GREEN),
-                        _bar('Inside Penalty Box',     so['zones']['inside_box'],  GOLD),
-                        _bar('Outside Box (30m+)',      so['zones']['outside_box'], RED),
-                    ]),
-                    html.Div(style={'marginTop': '12px'}, children=[
-                        html.Div('TOP FINISHERS', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _player_table(so['finishers'], color=ORANGE),
-                    ]) if so['finishers'] else html.Div(),
-                ], md=4),
+                    _bar('Corners / Game', sp['corners_pg'], GOLD),
+                    _bar('Free Kicks / Game', sp['fks_pg'], BLUE),
+                    _bar('Set Piece Shots / Game', sp['sp_shots_pg'], PURPLE),
+                    _bar('Set Piece Goals', sp['sp_goals'], GREEN),
+                ], md=5),
                 dbc.Col([
-                    html.Img(src=img, style={'width': '100%', 'borderRadius': '8px'}),
+                    html.Img(src=img_b64, style={'width': '100%', 'borderRadius': '8px'}),
                     html.Div('★ Goal  ● On Target  ○ Off Target  ◆ Post', style={
                         'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
                         'textAlign': 'center', 'marginTop': '4px',
                     }),
-                    html.Div(style={
-                        'marginTop': '14px', 'padding': '12px',
-                        'background': 'rgba(255,255,255,0.03)',
-                        'borderRadius': '10px', 'border': '1px solid var(--border-color)',
-                        'fontSize': '0.68rem', 'color': 'var(--text-secondary)', 'lineHeight': '1.65',
-                    }, children=[
-                        html.Strong('xG Proxy (location-based estimate):', style={'color': GOLD, 'display': 'block', 'marginBottom': '4px'}),
-                        html.Span('Small box ≈ 0.45 · Inside box ≈ 0.15 · Outside box ≈ 0.05 · Headers ÷ 2'),
-                        html.Br(),
-                        html.Span('For calibrated xG and xGOT values a dedicated model is required.'),
-                    ]),
-                ], md=8),
+                ], md=7),
             ]),
-            title=f'{rival_label} — Full Shot Profile', icon='🎯'
+            title=f'{rival_label} — Set Piece Threat & Shots', icon='🎯'
         ))
-
     except Exception:
         pass
 
     return html.Div(sections) if sections else html.Div(className='goz-form-section', children=[
-        html.Div('No shot profile data available.', className='goz-card-desc')
+        html.Div('No set piece data available.', className='goz-card-desc')
     ])
-
-
-# ════════════════════════════════════════════════════════════════
-# DATA FEASIBILITY NOTE
-# ════════════════════════════════════════════════════════════════
-
-def _feasibility_note():
-    available = [
-        'Build-up pass type (short / long)',
-        'Build-up zone (left / center / right)',
-        'Key build-up players',
-        '15-second outcomes after ball win',
-        'Final third entry method & zone',
-        'Zone 14 passes, duels, shots',
-        'Playmaker identification (progressive passes)',
-        'Tempo (passes per game)',
-        'GK involvement in build-up',
-        'Winger touches in wide final third',
-        'Full-back pass contribution',
-        'Who finishes attacks',
-        'Shot origin: cross / set-piece / open-play / fast-break',
-        'Shot zone: inside box / outside box',
-        'Shots on target %',
-        'Header %',
-        'xG chain source approximation',
-        'Pressing intensity (PPDA proxy)',
-        'Defensive line height',
-        'Aerial duels (win %, box vs rest)',
-        'Ground duels (win %)',
-        'Pre-goal 30-second window',
-        'Vulnerable flanks (F3 entries conceded)',
-        'Zone 14 control (defensive)',
-        'Offside trap (provoked events)',
-        'Ball win / loss locations & 15-second outcomes',
-        'Who wins / loses ball most',
-        'Shot location & accuracy',
-    ]
-    not_available = [
-        'Exact triangle formation detection (requires tracking / positional data)',
-        'Numerical superiority by zone (requires simultaneous player positions)',
-        'Player speed and distance data (requires GPS / tracking)',
-        'Block-to-block gap analysis (requires tracking)',
-        'Calibrated xG / xGOT values (requires trained model)',
-    ]
-    return _card(
-        dbc.Row([
-            dbc.Col([
-                html.Div('✅ Available from event data', style={
-                    'fontSize': '0.75rem', 'fontWeight': '700', 'color': GREEN,
-                    'letterSpacing': '0.5px', 'marginBottom': '10px',
-                }),
-                html.Ul([html.Li(x, style={'fontSize': '0.72rem', 'color': 'var(--text-secondary)', 'marginBottom': '3px'})
-                         for x in available], style={'paddingLeft': '16px', 'margin': '0'}),
-            ], md=6),
-            dbc.Col([
-                html.Div('❌ Requires tracking / model (not in event logs)', style={
-                    'fontSize': '0.75rem', 'fontWeight': '700', 'color': RED,
-                    'letterSpacing': '0.5px', 'marginBottom': '10px',
-                }),
-                html.Ul([html.Li(x, style={'fontSize': '0.72rem', 'color': 'var(--text-secondary)', 'marginBottom': '3px'})
-                         for x in not_available], style={'paddingLeft': '16px', 'margin': '0'}),
-            ], md=6),
-        ]),
-        title='Event Data Feasibility', icon='📊'
-    )
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1821,11 +1783,11 @@ def layout():
     default_value = next(iter(rivals.values()), None)
     rival_options = [{'label': label, 'value': value} for label, value in rivals.items()]
     tab_options   = [
-        {'label': '⚔️  Offensive',   'value': 'off'},
-        {'label': '🛡  Defensive',    'value': 'def'},
-        {'label': '⚡  Transitions',  'value': 'trans'},
-        {'label': '🎯  Shot Profile', 'value': 'shots'},
-        {'label': '📊  Feasibility',  'value': 'info'},
+        {'label': '⚔️  Offensive',        'value': 'off'},
+        {'label': '🛡  Defensive',         'value': 'def'},
+        {'label': '⚡  Off. Transitions',  'value': 'off-trans'},
+        {'label': '🔄  Def. Transitions',  'value': 'def-trans'},
+        {'label': '🎯  Set Pieces',        'value': 'set-pieces'},
     ]
 
     return html.Div(className='page-wrap', children=[
@@ -1963,11 +1925,11 @@ def update_scout_content(rival_label, selected_file, active_tab):
     rival_display = _short(team_name)
     match_card = _build_selected_match_card(fname, df, team_name, rival_display)
 
-    if   active_tab == 'off':   content = _build_offensive(single, team_name, rival_display)
-    elif active_tab == 'def':   content = _build_defensive(single, team_name, rival_display)
-    elif active_tab == 'trans': content = _build_transitions(single, team_name, rival_display)
-    elif active_tab == 'shots': content = _build_shot_profile(single, team_name, rival_display)
-    elif active_tab == 'info':  content = _feasibility_note()
-    else:                       content = html.Div()
+    if   active_tab == 'off':        content = _build_offensive(single, team_name, rival_display)
+    elif active_tab == 'def':        content = _build_defensive(single, team_name, rival_display)
+    elif active_tab == 'off-trans':  content = _build_off_transitions(single, team_name, rival_display)
+    elif active_tab == 'def-trans':  content = _build_def_transitions(single, team_name, rival_display)
+    elif active_tab == 'set-pieces': content = _build_set_pieces(single, team_name, rival_display)
+    else:                            content = html.Div()
 
     return match_card, content

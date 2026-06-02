@@ -139,8 +139,8 @@ def extract_transitions_for_match(df, team_name):
 
 def _analyze_windows(df, transitions, active_team, is_attacking):
     """
-    Fill in the 15-second consequence data for a list of transitions.
-    `active_team` is the team we are tracking in the 15 seconds 
+    Fill in the 10-second consequence data for a list of transitions.
+    `active_team` is the team we are tracking in the 10 seconds 
     (the team doing the transition, or the opponent capitalizing on the loss).
     """
     for tr in transitions:
@@ -154,18 +154,19 @@ def _analyze_windows(df, transitions, active_team, is_attacking):
         reached_f3 = False
         shot = False
         goal = False
+        shot_coords = []
         
-        events_in_15s = []
+        events_in_10s = []
 
         for j in range(start_idx, len(df)):
             ev_row = df.iloc[j]
             if ev_row['team_name'] != active_team:
-                # Possession lost before 15s
+                # Possession lost before 10s
                 break
                 
             cur_time = ev_row['time_min'] * 60 + ev_row['time_sec']
-            if cur_time - start_time > 15:
-                # 15 seconds elapsed
+            if cur_time - start_time > 10:
+                # 10 seconds elapsed
                 break
                 
             # Track actions
@@ -173,7 +174,7 @@ def _analyze_windows(df, transitions, active_team, is_attacking):
             if x >= F3_X:
                 reached_f3 = True
                 
-            events_in_15s.append(ev_row)
+            events_in_10s.append(ev_row)
             
             e_type = ev_row['event']
             if e_type == 'Pass':
@@ -185,16 +186,23 @@ def _analyze_windows(df, transitions, active_team, is_attacking):
                     duels_won += 1
             elif e_type in SHOT_EVENTS:
                 shot = True
+                shot_coords.append({
+                    'x': ev_row.get('x', 88.5),
+                    'y': ev_row.get('y', 50.0),
+                    'event': e_type,
+                    'player': ev_row.get('player_name', 'Unknown')
+                })
                 if e_type == 'Goal':
                     goal = True
 
-        tr['events_count'] = len(events_in_15s)
+        tr['events_count'] = len(events_in_10s)
         tr['passes'] = passes
         tr['carries'] = carries
         tr['duels_won'] = duels_won
         tr['reached_f3'] = reached_f3
         tr['shot'] = shot
         tr['goal'] = goal
+        tr['shot_coords'] = shot_coords
 
 
 def get_opponent_transition_profile(team_name):
@@ -253,6 +261,7 @@ def get_opponent_transition_profile(team_name):
         # Sort top 10
         att_profile['top_players'] = sorted(players.items(), key=lambda item: item[1], reverse=True)[:10]
         att_profile['coords'] = [{'x': a['recovery_x'], 'y': a['recovery_y']} for a in all_att]
+        att_profile['shot_coords'] = [sc for a in all_att for sc in a.get('shot_coords', [])]
 
     # Aggregate Defensive Transitions (Losses)
     def_profile = {}
@@ -276,5 +285,6 @@ def get_opponent_transition_profile(team_name):
         
         def_profile['top_players'] = sorted(players.items(), key=lambda item: item[1], reverse=True)[:10]
         def_profile['coords'] = [{'x': d['loss_x'], 'y': d['loss_y']} for d in all_def]
+        def_profile['shot_coords'] = [sc for d in all_def for sc in d.get('shot_coords', [])]
 
     return att_profile, def_profile

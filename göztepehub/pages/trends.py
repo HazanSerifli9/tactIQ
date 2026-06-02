@@ -2,8 +2,6 @@ import dash
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
 from utils.data import extract_fixture_data, calculate_standings
-from göztepehub.utils.recipient_analysis import get_goztepe_players, get_recipient_analysis
-from göztepehub.utils.pitch import draw_pitch
 from göztepehub.utils.why_we_lose import calc_why_we_lose
 import plotly.graph_objects as go
 import numpy as np
@@ -11,14 +9,191 @@ import numpy as np
 dash.register_page(__name__, path='/trends', title='Göztepe Hub | Trends')
 
 
-def _build_home_away_tab():
+def _record_badge(label, rec):
+    total = rec['W'] + rec['D'] + rec['L']
+    win_pct = round(rec['W'] / total * 100) if total else 0
+    color = '#22c55e' if win_pct >= 50 else '#ef4444'
+    return html.Div([
+        html.Div(label, style={"fontSize": "0.7rem", "textTransform": "uppercase",
+                               "letterSpacing": "1px", "color": "#888", "marginBottom": "6px"}),
+        html.Div([
+            html.Span(f"W {rec['W']}", style={"color": "#22c55e", "fontWeight": "bold", "marginRight": "8px"}),
+            html.Span(f"D {rec['D']}", style={"color": "#888", "fontWeight": "bold", "marginRight": "8px"}),
+            html.Span(f"L {rec['L']}", style={"color": "#ef4444", "fontWeight": "bold"}),
+        ], style={"fontSize": "1.1rem"}),
+        html.Div(f"GF {rec['GF']}  –  GA {rec['GA']}",
+                 style={"fontSize": "0.8rem", "color": "#888", "marginTop": "4px"}),
+        html.Div(f"{win_pct}% win rate",
+                 style={"fontSize": "0.85rem", "color": color, "fontWeight": "bold", "marginTop": "4px"}),
+    ], style={"flex": "1", "textAlign": "center"})
+
+
+def _build_loss_pattern_block(team_name, accent_color="#fbbf24"):
     try:
-        data = calc_why_we_lose()
+        data = calc_why_we_lose(team_name)
+    except Exception:
+        return html.Div(f"Data not available for {team_name}.", style={"textAlign": "center", "color": "#888", "padding": "40px"})
+
+    hr = data['home_record']
+    ar = data['away_record']
+    cb = data['conceded_bands']
+    sb = data['scored_bands']
+    gs = data['game_state_conceded']
+    asf = data['after_scoring_first']
+    acf = data['after_conceding_first']
+
+    bands = ['1-30', '31-60', '61-90', '90+']
+
+    # ── Chart 1: Goals scored vs conceded by minute band ──
+    fig_bands = go.Figure(data=[
+        go.Bar(name='Goals Scored', x=bands, y=[sb[b] for b in bands],
+               marker_color=accent_color, opacity=0.9),
+        go.Bar(name='Goals Conceded', x=bands, y=[cb[b] for b in bands],
+               marker_color='#ef4444', opacity=0.9),
+    ])
+    fig_bands.update_layout(
+        barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=10, r=10, t=10, b=30),
+        height=200,
+        legend=dict(orientation='h', y=-0.25, x=0.5, xanchor='center',
+                    font=dict(color='white', size=11)),
+        xaxis=dict(color='#888', showgrid=False),
+        yaxis=dict(color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.08)'),
+        font=dict(color='white'),
+    )
+
+    # ── Chart 2: Game state when conceding ──
+    total_conceded = sum(gs.values()) or 1
+    states = ['When LEADING', 'When DRAWING', 'When TRAILING']
+    vals = [gs['Leading'], gs['Drawing'], gs['Trailing']]
+    colors = [accent_color, '#888888', '#ef4444']
+    pcts = [f"{v/total_conceded*100:.0f}%" for v in vals]
+
+    fig_state = go.Figure(go.Bar(
+        y=states, x=vals, orientation='h',
+        marker_color=colors,
+        text=pcts, textposition='outside',
+        textfont=dict(color='white', size=12),
+    ))
+    fig_state.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=10, r=40, t=10, b=10),
+        height=160,
+        xaxis=dict(color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.08)'),
+        yaxis=dict(color='white', showgrid=False),
+        font=dict(color='white'),
+    )
+
+    short_team = team_name.replace(" Spor Kulübü", "").replace(" Jimnastik Kulübü", "").replace(" Futbol Kulübü", "")
+
+    # ── Score-first boxes ──
+    def _first_goal_box(title, rec, icon, accent):
+        played = rec['played']
+        win_pct = round(rec['W'] / played * 100) if played else 0
+        return html.Div([
+            html.Div(icon, style={"fontSize": "1.8rem", "marginBottom": "6px"}),
+            html.Div(title, style={"fontSize": "0.7rem", "textTransform": "uppercase",
+                                   "letterSpacing": "1px", "color": "#888", "marginBottom": "8px"}),
+            html.Div(f"{win_pct}%", style={"fontSize": "2rem", "fontWeight": "bold",
+                                           "color": accent, "lineHeight": "1"}),
+            html.Div("win rate", style={"fontSize": "0.75rem", "color": "#888", "marginTop": "2px"}),
+            html.Div(f"W {rec['W']}  D {rec['D']}  L {rec['L']}  ({played} games)",
+                     style={"fontSize": "0.75rem", "color": "#aaa", "marginTop": "8px"}),
+        ], style={"flex": "1", "textAlign": "center", "padding": "16px",
+                  "background": "rgba(255,255,255,0.03)", "borderRadius": "8px",
+                  "border": f"1px solid {accent}33"})
+
+    card_style = {
+        "background": "rgba(14, 18, 24, 0.7)",
+        "border": "1px solid rgba(255,255,255,0.08)",
+        "borderRadius": "12px",
+        "padding": "20px",
+    }
+    label_style = {
+        "fontSize": "0.65rem", "textTransform": "uppercase", "letterSpacing": "2px",
+        "color": accent_color, "marginBottom": "14px", "fontWeight": "bold",
+    }
+
+    return html.Div([
+        dbc.Row([
+            # Home vs Away
+            dbc.Col(html.Div([
+                html.Div("HOME vs AWAY RECORD", style=label_style),
+                html.Div([
+                    _record_badge("AT HOME", hr),
+                    html.Div(style={"width": "1px", "background": "rgba(255,255,255,0.1)",
+                                    "margin": "0 16px"}),
+                    _record_badge("AWAY", ar),
+                ], style={"display": "flex", "alignItems": "center"}),
+            ], style=card_style), md=4, style={"marginBottom": "20px"}),
+
+            # Goals by minute band
+            dbc.Col(html.Div([
+                html.Div(f"WHEN DOES {short_team.upper()} SCORE & CONCEDE?", style=label_style),
+                html.Div("Each 30-minute block of the match",
+                         style={"fontSize": "0.75rem", "color": "#888", "marginBottom": "8px"}),
+                dcc.Graph(figure=fig_bands, config={'displayModeBar': False},
+                          style={"height": "210px"}),
+            ], style=card_style), md=8, style={"marginBottom": "20px"}),
+        ]),
+
+        dbc.Row([
+            # First goal impact
+            dbc.Col(html.Div([
+                html.Div("FIRST GOAL IMPACT", style=label_style),
+                html.Div("What happens depending on who scores first",
+                         style={"fontSize": "0.75rem", "color": "#888", "marginBottom": "12px"}),
+                html.Div([
+                    _first_goal_box(f"{short_team} Scores First", asf, "⚽", accent_color),
+                    html.Div(style={"width": "12px"}),
+                    _first_goal_box("Opponent Scores First", acf, "🛡️", "#ef4444"),
+                ], style={"display": "flex"}),
+            ], style=card_style), md=6, style={"marginBottom": "20px"}),
+
+            # Game state when conceding
+            dbc.Col(html.Div([
+                html.Div(f"GAME STATE WHEN {short_team.upper()} CONCEDES", style=label_style),
+                html.Div("Do they switch off after going ahead?",
+                         style={"fontSize": "0.75rem", "color": "#888", "marginBottom": "8px"}),
+                dcc.Graph(figure=fig_state, config={'displayModeBar': False},
+                          style={"height": "170px"}),
+            ], style=card_style), md=6, style={"marginBottom": "20px"}),
+        ]),
+    ])
+
+
+def _build_why_we_lose(compare_team=None):
+    if compare_team and compare_team != 'None':
+        return html.Div([
+            html.Div("GÖZTEPE SPOR KULÜBÜ", style={"textAlign": "center", "fontSize": "0.85rem", "fontWeight": "bold", "color": "#fbbf24", "letterSpacing": "2px", "marginBottom": "16px"}),
+            _build_loss_pattern_block("Göztepe Spor Kulübü", "#fbbf24"),
+            
+            html.Hr(style={"borderTop": "1px solid rgba(255,255,255,0.1)", "margin": "30px 0"}),
+            
+            html.Div(compare_team.upper(), style={"textAlign": "center", "fontSize": "0.85rem", "fontWeight": "bold", "color": "#0ea5e9", "letterSpacing": "2px", "marginBottom": "16px"}),
+            _build_loss_pattern_block(compare_team, "#0ea5e9")
+        ], style={"maxWidth": "1100px", "margin": "0 auto", "padding": "20px"})
+    
+    return html.Div([
+        _build_loss_pattern_block("Göztepe Spor Kulübü", "#fbbf24")
+    ], style={"maxWidth": "1100px", "margin": "0 auto", "padding": "20px"})
+
+
+def _build_home_away_tab(compare_team=None):
+    try:
+        data = calc_why_we_lose('Göztepe Spor Kulübü')
     except Exception:
         return html.Div("Data not available.", style={"textAlign": "center", "color": "#888", "padding": "40px"})
 
     hr = data['home_record']
     ar = data['away_record']
+
+    comp_data = None
+    if compare_team and compare_team != 'None':
+        try:
+            comp_data = calc_why_we_lose(compare_team)
+        except Exception:
+            pass
 
     def ppg(rec):
         total = rec['W'] + rec['D'] + rec['L']
@@ -65,10 +240,37 @@ def _build_home_away_tab():
     a_gf_pg = round(ar['GF'] / a_total, 2) if a_total else 0
     a_ga_pg = round(ar['GA'] / a_total, 2) if a_total else 0
 
+    if comp_data:
+        chr = comp_data['home_record']
+        car = comp_data['away_record']
+        ch_total = chr['W'] + chr['D'] + chr['L']
+        ca_total = car['W'] + car['D'] + car['L']
+        ch_gf_pg = round(chr['GF'] / ch_total, 2) if ch_total else 0
+        ch_ga_pg = round(chr['GA'] / ch_total, 2) if ch_total else 0
+        ca_gf_pg = round(car['GF'] / ca_total, 2) if ca_total else 0
+        ca_ga_pg = round(car['GA'] / ca_total, 2) if ca_total else 0
+
+        short_comp = compare_team.replace(" Spor Kulübü", "").replace(" Jimnastik Kulübü", "").replace(" Futbol Kulübü", "")[:10]
+        x_labels = ['Göztepe (H)', 'Göztepe (A)', f'{short_comp} (H)', f'{short_comp} (A)']
+        
+        y_gf = [h_gf_pg, a_gf_pg, ch_gf_pg, ca_gf_pg]
+        y_ga = [h_ga_pg, a_ga_pg, ch_ga_pg, ca_ga_pg]
+        
+        y_won = [hr['W'], ar['W'], chr['W'], car['W']]
+        y_drawn = [hr['D'], ar['D'], chr['D'], car['D']]
+        y_lost = [hr['L'], ar['L'], chr['L'], car['L']]
+    else:
+        x_labels = ['Home', 'Away']
+        y_gf = [h_gf_pg, a_gf_pg]
+        y_ga = [h_ga_pg, a_ga_pg]
+        y_won = [hr['W'], ar['W']]
+        y_drawn = [hr['D'], ar['D']]
+        y_lost = [hr['L'], ar['L']]
+
     fig_goals = go.Figure(data=[
-        go.Bar(name='Goals Scored / Game', x=['Home', 'Away'], y=[h_gf_pg, a_gf_pg],
+        go.Bar(name='Goals Scored / Game', x=x_labels, y=y_gf,
                marker_color='#fbbf24', opacity=0.9),
-        go.Bar(name='Goals Conceded / Game', x=['Home', 'Away'], y=[h_ga_pg, a_ga_pg],
+        go.Bar(name='Goals Conceded / Game', x=x_labels, y=y_ga,
                marker_color='#ef4444', opacity=0.9),
     ])
     fig_goals.update_layout(
@@ -83,11 +285,11 @@ def _build_home_away_tab():
 
     # ── W/D/L stacked bar ──
     fig_record = go.Figure(data=[
-        go.Bar(name='Won', x=['Home', 'Away'], y=[hr['W'], ar['W']],
+        go.Bar(name='Won', x=x_labels, y=y_won,
                marker_color='#22c55e', opacity=0.9),
-        go.Bar(name='Drawn', x=['Home', 'Away'], y=[hr['D'], ar['D']],
+        go.Bar(name='Drawn', x=x_labels, y=y_drawn,
                marker_color='#888888', opacity=0.9),
-        go.Bar(name='Lost', x=['Home', 'Away'], y=[hr['L'], ar['L']],
+        go.Bar(name='Lost', x=x_labels, y=y_lost,
                marker_color='#ef4444', opacity=0.9),
     ])
     fig_record.update_layout(
@@ -105,24 +307,50 @@ def _build_home_away_tab():
     lbl = {"fontSize": "0.65rem", "textTransform": "uppercase", "letterSpacing": "2px",
            "color": "#fbbf24", "fontWeight": "bold", "marginBottom": "14px"}
 
+    goz_pills = html.Div([
+        stat_col("Points Per Game", h_ppg, a_ppg, ppg_color_h, ppg_color_a),
+        stat_col("Win %", f"{win_pct(hr)}%", f"{win_pct(ar)}%"),
+        stat_col("Goals For", hr['GF'], ar['GF']),
+        stat_col("Goals Against", hr['GA'], ar['GA']),
+        stat_col("Games Played", h_total, a_total),
+    ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
+              "marginBottom": "24px", "justifyContent": "center"})
+
+    pills_container = [
+        html.Div("GÖZTEPE SPLIT", style={"fontSize": "0.75rem", "fontWeight": "bold", "color": "#fbbf24", "textAlign": "center", "marginBottom": "10px", "letterSpacing": "1px"}),
+        goz_pills
+    ]
+
+    if comp_data:
+        ch_ppg = ppg(chr)
+        ca_ppg = ppg(car)
+        cppg_color_h = "#22c55e" if ch_ppg > ca_ppg else "#ef4444"
+        cppg_color_a = "#22c55e" if ca_ppg > ch_ppg else "#ef4444"
+
+        comp_pills = html.Div([
+            stat_col("Points Per Game", ch_ppg, ca_ppg, cppg_color_h, cppg_color_a),
+            stat_col("Win %", f"{win_pct(chr)}%", f"{win_pct(car)}%"),
+            stat_col("Goals For", chr['GF'], car['GF']),
+            stat_col("Goals Against", chr['GA'], car['GA']),
+            stat_col("Games Played", ch_total, ca_total),
+        ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
+                  "marginBottom": "24px", "justifyContent": "center"})
+        
+        pills_container.extend([
+            html.Div(f"{compare_team.upper()} SPLIT", style={"fontSize": "0.75rem", "fontWeight": "bold", "color": "#0ea5e9", "textAlign": "center", "marginTop": "20px", "marginBottom": "10px", "letterSpacing": "1px"}),
+            comp_pills
+        ])
+
     return html.Div([
         html.Div("HOME vs AWAY SPLIT", style={
             "textAlign": "center", "fontSize": "0.7rem", "letterSpacing": "3px",
             "textTransform": "uppercase", "color": "#ef4444", "fontWeight": "bold", "marginBottom": "6px",
         }),
-        html.H3("How different are we at home vs away?", style={
+        html.H3("How different is the home vs away performance?", style={
             "textAlign": "center", "marginBottom": "28px", "marginTop": "4px", "fontSize": "1.3rem",
         }),
 
-        # Key stat pills
-        html.Div([
-            stat_col("Points Per Game", h_ppg, a_ppg, ppg_color_h, ppg_color_a),
-            stat_col("Win %", f"{win_pct(hr)}%", f"{win_pct(ar)}%"),
-            stat_col("Goals For", hr['GF'], ar['GF']),
-            stat_col("Goals Against", hr['GA'], ar['GA']),
-            stat_col("Games Played", h_total, a_total),
-        ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
-                  "marginBottom": "24px", "justifyContent": "center"}),
+        html.Div(pills_container),
 
         dbc.Row([
             dbc.Col(html.Div([
@@ -152,10 +380,6 @@ def layout():
     teams = get_all_teams()
     opts = [{'label': 'None (Göztepe Only)', 'value': 'None'}] + [{'label': t, 'value': t} for t in teams]
     
-    # Send players
-    goz_players = get_goztepe_players()
-    player_opts = [{'label': p, 'value': p} for p in goz_players]
-    
     return html.Div(
         className="page-wrap",
         children=[
@@ -164,13 +388,19 @@ def layout():
                 children=[
                     html.H3("Göztepe Data Hub & Trends", style={"textAlign": "center", "marginBottom": "20px", "marginTop": "20px"}),
                     
+                    html.Div([
+                        html.Label("Compare With:", style={"fontWeight": "bold", "marginBottom": "10px", "marginRight": "10px", "color": "#ccc"}),
+                        dcc.Dropdown(id='trends-compare-dropdown', options=opts, value='None', 
+                                     style={"color": "#000", "minWidth": "300px", "display": "inline-block"})
+                    ], style={"textAlign": "center", "marginBottom": "30px"}),
+
                     dbc.Tabs(
                         id="trends-tabs",
                         active_tab="Team Form",
                         children=[
                             dbc.Tab(label="Team Form & Trajectory", tab_id="Team Form", label_style={"color": "#fbbf24"}),
                             dbc.Tab(label="Home vs Away", tab_id="HomeAway", label_style={"color": "#ef4444"}),
-                            dbc.Tab(label="Pass Recipient Analysis", tab_id="Recipients", label_style={"color": "#0ea5e9"}),
+                            dbc.Tab(label="Loss Pattern Analysis", tab_id="LossPatterns", label_style={"color": "#f97316"}),
                         ],
                         className="mb-4",
                         style={"borderBottom": "1px solid #333", "justifyContent": "center"}
@@ -185,293 +415,18 @@ def layout():
 
 @callback(
     Output("trends-tab-content", "children"),
-    Input("trends-tabs", "active_tab")
+    [Input("trends-tabs", "active_tab"),
+     Input("trends-compare-dropdown", "value")]
 )
-def render_trends_tab(active_tab):
-    if active_tab == "HomeAway":
-        return _build_home_away_tab()
+def render_trends_tab(active_tab, compare_team):
+    if active_tab == "LossPatterns":
+        return _build_why_we_lose(compare_team)
 
-    if active_tab == "Recipients":
-        goz_players = get_goztepe_players()
-        p_opts = [{'label': p, 'value': p} for p in goz_players]
-        # Sort so we have a reliable default
-        default_p = "Y. Kayan" if "Y. Kayan" in goz_players else (goz_players[0] if goz_players else None)
-        
-        return html.Div([
-            html.Div("Actions after receiving a pass from a specific player", style={"textAlign": "center", "color": "#888", "marginBottom": "20px"}),
-            html.Div([
-                html.Label("Sender (Pass From):", style={"fontWeight": "bold", "marginBottom": "5px"}),
-                dcc.Dropdown(
-                    id='trends-sender-dropdown', options=p_opts, value=default_p, 
-                    style={"color": "#000", "minWidth": "250px", "marginBottom": "15px"}
-                ),
-                html.Label("Recipient (To Plot Map):", style={"fontWeight": "bold", "marginBottom": "5px"}),
-                dcc.Dropdown(
-                    id='trends-recipient-dropdown', options=[], value=None,
-                    style={"color": "#000", "minWidth": "250px"}
-                )
-            ], style={"maxWidth": "400px", "margin": "0 auto 30px", "background": "#1e1e1e", "padding": "20px", "borderRadius": "8px", "border": "1px solid #333"}),
-            
-            dbc.Row([
-                dbc.Col(html.Div(id='recipient-map-container'), md=7),
-                dbc.Col([
-                    html.Div(id='recipient-zones-container', style={"marginBottom": "20px"}),
-                    html.Div(id='recipient-table-container')
-                ], md=5)
-            ])
-        ])
+    if active_tab == "HomeAway":
+        return _build_home_away_tab(compare_team)
 
     # Default to Team Form
-    teams = get_all_teams()
-    opts = [{'label': 'None (Göztepe Only)', 'value': 'None'}] + [{'label': t, 'value': t} for t in teams]
-    return html.Div([
-        html.Div("Compare Göztepe's form against another team over the season.", style={"textAlign": "center", "color": "#888", "marginBottom": "30px"}),
-        
-        html.Div([
-            html.Label("Compare With:", style={"fontWeight": "bold", "marginBottom": "10px", "marginRight": "10px"}),
-            dcc.Dropdown(id='trends-compare-dropdown', options=opts, value='None', 
-                         style={"color": "#000", "minWidth": "300px", "display": "inline-block"})
-        ], style={"textAlign": "center", "marginBottom": "40px"}),
-        
-        html.Div(id='trends-dashboard-content', style={"padding": "0 20px"})
-    ])
-
-# Callback for the drop downs
-@callback(
-    [Output('trends-recipient-dropdown', 'options'),
-     Output('trends-recipient-dropdown', 'value')],
-    Input('trends-sender-dropdown', 'value')
-)
-def update_recipient_dropdown(sender):
-    if not sender:
-        return [], None
-    recs = get_recipient_analysis(sender)
-    opts = [{'label': r['Player'], 'value': r['Player']} for r in recs]
-    default_val = opts[0]['value'] if opts else None
-    return opts, default_val
-    
-
-@callback(
-    [Output('recipient-table-container', 'children'),
-     Output('recipient-map-container', 'children'),
-     Output('recipient-zones-container', 'children')],
-    [Input('trends-sender-dropdown', 'value'),
-     Input('trends-recipient-dropdown', 'value')]
-)
-def render_recipient_analysis(sender, recipient):
-    if not sender:
-        return html.Div(), html.Div(), html.Div()
-        
-    recs = get_recipient_analysis(sender)
-    
-    # 1. Build Table
-    trs = []
-    for r in recs:
-        is_active = (r['Player'] == recipient)
-        bg = "rgba(40, 167, 69, 0.2)" if is_active else "transparent"
-        trs.append(html.Tr([
-            html.Td(r['Player'], style={"fontWeight": "bold", "color": "#fff" if is_active else "#ccc"}),
-            html.Td(r['Receptions'], style={"textAlign": "center"}),
-            html.Td(r['PP_per_R'], style={"textAlign": "center", "color": "#22c55e" if r['PP_per_R'] > 0.15 else "#888"}),
-            html.Td(r['PC_per_R'], style={"textAlign": "center", "color": "#3b82f6" if r['PC_per_R'] > 0.05 else "#888"}),
-            html.Td(r['TO_Won_Att'], style={"textAlign": "center"})
-        ], style={"backgroundColor": bg, "borderBottom": "1px solid #333"}))
-    
-    table = html.Div([
-        html.Div(f"TOP RECIPIENTS | {sender.upper()}", style={"textAlign": "center", "fontWeight": "bold", "color": "#ccc", "letterSpacing": "1px", "marginBottom": "10px"}),
-        html.P("Rec = Receptions | PP/R = Progressive Passes/Rec | PC/R = Prog. Carries/Rec", style={"textAlign": "center", "fontSize": "0.75rem", "color": "#888"}),
-        html.Table([
-            html.Thead(html.Tr([
-                html.Th("Player", style={"textAlign": "left", "color": "#888", "padding": "8px"}),
-                html.Th("Rec", style={"textAlign": "center", "color": "#888", "padding": "8px"}),
-                html.Th("PP/R", style={"textAlign": "center", "color": "#888", "padding": "8px"}),
-                html.Th("PC/R", style={"textAlign": "center", "color": "#888", "padding": "8px"}),
-                html.Th("TO W/Att", style={"textAlign": "center", "color": "#888", "padding": "8px"})
-            ]), style={"borderBottom": "1px solid #555"}),
-            html.Tbody(trs)
-        ], style={"width": "100%", "marginTop": "10px", "fontSize": "0.85rem", "borderCollapse": "collapse"})
-    ], style={"background": "#111", "padding": "20px", "borderRadius": "8px", "border": "1px solid #333"})
-
-    # 2. Build Map
-    fig = draw_pitch(theme='dark')
-    if recipient:
-        target_rec = next((r for r in recs if r['Player'] == recipient), None)
-        if target_rec:
-            # color mapping
-            cmap = {
-                "Progressive Pass": "#22c55e", # green
-                "Successful Pass": "#3b82f6",  # blue
-                "Unsuccessful Pass": "#555555",# grey
-                "Progressive Carry": "#ef4444",# red
-                "Take-On": "#a855f7",          # purple
-                "Shot": "#fbbf24",             # gold
-                "Other": "#888888"
-            }
-            
-            # draw lines for actions
-            for a in target_rec['actions']:
-                color = cmap.get(a['type'], "#aaa")
-                
-                if a['type'] == "Progressive Carry":
-                    mode = "lines+markers"
-                    dash = "dot"
-                else:
-                    mode = "lines+markers"
-                    dash = "solid"
-                    
-                fig.add_trace(go.Scatter(
-                    x=[a['start_x'], a['end_x']],
-                    y=[a['start_y'], a['end_y']],
-                    mode=mode,
-                    line=dict(color=color, width=2, dash=dash),
-                    marker=dict(size=5, color=color),
-                    showlegend=False,
-                    opacity=0.7,
-                    hoverinfo="text",
-                    text=f"{a['type']} by {recipient}"
-                ))
-            
-            # Add custom legend via invisible scatter traces
-            for type_name, color in cmap.items():
-                fig.add_trace(go.Scatter(
-                    x=[None], y=[None], mode="lines",
-                    name=type_name,
-                    line=dict(color=color, width=3, dash="dot" if type_name=="Progressive Carry" else "solid")
-                ))
-
-            fig.update_layout(
-                title=dict(
-                    text=f"<b>{recipient}</b><br>Actions after receiving from {sender}",
-                    font=dict(color="white", size=16),
-                    x=0.5, y=0.95, xanchor='center'
-                ),
-                legend=dict(
-                    orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5,
-                    font=dict(color="#ccc", size=10), bgcolor="rgba(0,0,0,0)"
-                ),
-                margin=dict(t=80, b=10, l=10, r=10)
-            )
-
-    map_container = dcc.Graph(figure=fig, config={'displayModeBar': False}, style={"height": "600px", "border": "1px solid #333", "borderRadius": "8px", "background": "#1e1e1e"})
-
-    # 3. Build Reception Zones
-    zone_container = html.Div()
-    if recipient and target_rec:
-        actions = target_rec['actions']
-        
-        # Grid settings: 3x3
-        x_bins = [0, 33.3, 66.6, 100]
-        y_bins = [0, 33.3, 66.6, 100]
-        
-        zones_data = {}
-        for a in actions:
-            rx, ry = a['start_x'], a['start_y']
-            is_prog = (a['type'] in ["Progressive Pass", "Progressive Carry"])
-            
-            x_i = next((i for i, x in enumerate(x_bins[1:]) if rx <= x), 2)
-            y_i = next((i for i, y in enumerate(y_bins[1:]) if ry <= y), 2)
-            z_id = f"{x_i}_{y_i}"
-            
-            if z_id not in zones_data:
-                zones_data[z_id] = {'count': 0, 'prog_count': 0, 
-                                    'center_x': (x_bins[x_i]+x_bins[x_i+1])/2, 
-                                    'center_y': (y_bins[y_i]+y_bins[y_i+1])/2}
-                                    
-            zones_data[z_id]['count'] += 1
-            if is_prog:
-                zones_data[z_id]['prog_count'] += 1
-                
-        fig_zones = draw_pitch(theme='dark')
-        total_actions = len(actions)
-        
-        # We need numpy to calculate angles for the arcs
-        import numpy as np
-        
-        for z_id, zd in zones_data.items():
-            if zd['count'] > 0:
-                prog_rate = (zd['prog_count'] / zd['count']) * 100
-                
-                # Scale from 0 to max_radius (e.g. 10 coords)
-                r_coord = max(3, min(12, (zd['count'] / total_actions) * 15))
-                cx, cy = zd['center_x'], zd['center_y']
-                
-                # Draw the filled bubble (Reception Count) using polygons mapped to pitch coordinates
-                theta = np.linspace(0, 2*np.pi, 50)
-                circle_x = cx + r_coord * np.cos(theta)
-                circle_y = cy + r_coord * np.sin(theta)
-                
-                fig_zones.add_trace(go.Scatter(
-                    x=circle_x, y=circle_y,
-                    mode="lines",
-                    fill="toself", fillcolor="rgba(30, 64, 175, 0.6)", # Blue filling
-                    line=dict(color="rgba(255,255,255,0.1)", width=1),
-                    hoverinfo="skip",
-                    showlegend=False
-                ))
-                
-                # Draw the Progression Rate Arc
-                # Start at top (pi/2) and go clockwise
-                start_angle = np.pi / 2
-                end_angle = np.pi / 2 - (2 * np.pi * (prog_rate / 100))
-                
-                if prog_rate > 0:
-                    t_arc = np.linspace(start_angle, end_angle, 30)
-                    r_arc = r_coord * 1.05 # slightly outside the bubble
-                    arc_x = cx + r_arc * np.cos(t_arc)
-                    arc_y = cy + r_arc * np.sin(t_arc)
-                    
-                    fig_zones.add_trace(go.Scatter(
-                        x=arc_x, y=arc_y,
-                        mode="lines",
-                        line=dict(color="#22c55e", width=4), # Green arc
-                        hoverinfo="skip",
-                        showlegend=False
-                    ))
-                
-                # Text in center of bubble
-                fig_zones.add_trace(go.Scatter(
-                    x=[cx], y=[cy],
-                    mode='text',
-                    text=[f"<b>{zd['count']}</b>"],
-                    textposition="middle center",
-                    textfont=dict(color='white', size=13),
-                    hoverinfo='text',
-                    hovertext=f"Receptions: {zd['count']}<br>Prog. Rate: {prog_rate:.0f}%",
-                    showlegend=False
-                ))
-                
-                # Text for Progression rate below the bubble
-                fig_zones.add_trace(go.Scatter(
-                    x=[cx], y=[cy - r_coord - 3], # shifted down
-                    mode='text',
-                    text=[f"{prog_rate:.0f}%"],
-                    textfont=dict(color='#22c55e', size=11, family='Arial Black'),
-                    showlegend=False, hoverinfo='skip'
-                ))
-
-        team_prog = target_rec['PP_per_R'] + target_rec['PC_per_R']
-        
-        fig_zones.update_layout(
-            title=dict(
-                text="<b>RECEPTION ZONES</b><br><span style='font-size:12px;color:#888'>Where they receive and how often they progress the ball</span>",
-                font=dict(color="white", size=14),
-                x=0.5, y=0.92, xanchor='center'
-            ),
-            margin=dict(t=70, b=40, l=10, r=10),
-            height=350
-        )
-        
-        fig_zones.add_annotation(
-            text=f"{zd['prog_count'] if 'zd' in locals() else 0} progressive actions from {total_actions} receptions ({team_prog*100:.0f}%)",
-            xref="paper", yref="paper", x=0.5, y=-0.1, showarrow=False,
-            font=dict(color="#22c55e", size=10)
-        )
-
-        zone_container = html.Div([
-            dcc.Graph(figure=fig_zones, config={'displayModeBar': False}, style={"border": "1px solid #333", "borderRadius": "8px", "background": "#1e1e1e"})
-        ])
-
-    return table, map_container, zone_container
+    return _build_team_form_tab(compare_team)
 
 
 def extract_team_data(team_name, full_matches):
@@ -508,11 +463,7 @@ def extract_team_data(team_name, full_matches):
             })
     return data
 
-@callback(
-    Output('trends-dashboard-content', 'children'),
-    Input('trends-compare-dropdown', 'value')
-)
-def update_trends_dashboard(compare_team):
+def _build_team_form_tab(compare_team):
     compare_team = None if compare_team == 'None' else compare_team
     
     # 1. Fetch Lite Data for PPG

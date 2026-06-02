@@ -1,8 +1,5 @@
 import pandas as pd
 import numpy as np
-import os
-
-from utils.data import get_data_dir
 
 GOZTEPE = 'Göztepe Spor Kulübü'
 # Defending team goal is at x=0. Attacking team goal is at x=100.
@@ -19,29 +16,9 @@ Z14_Y_MAX = 66.6
 
 DEFENSIVE_EVENTS = {'Tackle', 'Interception', 'Clearance', 'Blocked Pass', 'Ball touch', 'Duel', 'Challenge'} 
 
-_OPPONENT_MATCHES_CACHE = {}
-
 def _load_opponent_matches(team_name):
-    if team_name in _OPPONENT_MATCHES_CACHE:
-        return _OPPONENT_MATCHES_CACHE[team_name]
-
-    data_dir = get_data_dir()
-    files = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
-
-    match_dfs = []
-    for filename in files:
-        try:
-            df = pd.read_parquet(os.path.join(data_dir, filename))
-            if 'team_name' not in df.columns:
-                continue
-            teams_in_match = df['team_name'].unique().tolist()
-            if team_name in teams_in_match and GOZTEPE not in teams_in_match:
-                match_dfs.append((filename, df))
-        except Exception:
-            continue
-
-    _OPPONENT_MATCHES_CACHE[team_name] = match_dfs
-    return match_dfs
+    from göztepehub.utils.transitions_analysis import _load_opponent_matches as load_matches
+    return load_matches(team_name)
 
 def _is_in_def_box(x, y):
     return x <= DEF_BOX_X and DEF_BOX_Y_MIN <= y <= DEF_BOX_Y_MAX

@@ -5,17 +5,17 @@ from utils.data import get_data_dir
 
 GOZTEPE = 'Göztepe Spor Kulübü'
 
-_cache = None
+_cache_by_team = {}
 
 
-def _load_goztepe_match_dfs():
+def _load_match_dfs_for_team(team_name):
     data_dir = get_data_dir()
     files = sorted(f for f in os.listdir(data_dir) if f.endswith('.parquet'))
     match_dfs = []
     for filename in files:
         try:
             df = pd.read_parquet(os.path.join(data_dir, filename))
-            if 'team_name' in df.columns and GOZTEPE in df['team_name'].values:
+            if 'team_name' in df.columns and team_name in df['team_name'].values:
                 df['_source'] = filename
                 match_dfs.append(df)
         except Exception:
@@ -45,12 +45,12 @@ def _minute_band(minute):
     return '90+'
 
 
-def calc_why_we_lose():
-    global _cache
-    if _cache is not None:
-        return _cache
+def calc_why_we_lose(team_name=GOZTEPE):
+    global _cache_by_team
+    if team_name in _cache_by_team:
+        return _cache_by_team[team_name]
 
-    match_dfs = _load_goztepe_match_dfs()
+    match_dfs = _load_match_dfs_for_team(team_name)
 
     home_record = {'W': 0, 'D': 0, 'L': 0, 'GF': 0, 'GA': 0}
     away_record = {'W': 0, 'D': 0, 'L': 0, 'GF': 0, 'GA': 0}
@@ -65,12 +65,12 @@ def calc_why_we_lose():
     after_conceding_first = {'played': 0, 'W': 0, 'D': 0, 'L': 0}
 
     for df in match_dfs:
-        goz_rows = df[df['team_name'] == GOZTEPE]
-        if goz_rows.empty:
+        team_rows = df[df['team_name'] == team_name]
+        if team_rows.empty:
             continue
 
-        goz_position = (
-            goz_rows['team_position'].iloc[0]
+        team_position = (
+            team_rows['team_position'].iloc[0]
             if 'team_position' in df.columns else 'home'
         )
 
@@ -85,27 +85,27 @@ def calc_why_we_lose():
         else:
             goals['_min'] = None
 
-        goz_score = 0
+        team_score = 0
         opp_score = 0
         first_goal_team = None
 
         for _, g in goals.iterrows():
-            is_goz = (g['team_name'] == GOZTEPE)
+            is_team = (g['team_name'] == team_name)
             band = _minute_band(g.get('_min'))
 
-            if is_goz:
+            if is_team:
                 if band:
                     scored_bands[band] += 1
                 if first_goal_team is None:
-                    first_goal_team = 'goztepe'
-                goz_score += 1
+                    first_goal_team = 'team'
+                team_score += 1
             else:
                 if band:
                     conceded_bands[band] += 1
                 if first_goal_team is None:
                     first_goal_team = 'opponent'
 
-                diff = goz_score - opp_score
+                diff = team_score - opp_score
                 if diff > 0:
                     game_state_conceded['Leading'] += 1
                 elif diff == 0:
@@ -115,26 +115,26 @@ def calc_why_we_lose():
 
                 opp_score += 1
 
-        if goz_score > opp_score:
+        if team_score > opp_score:
             result = 'W'
-        elif goz_score == opp_score:
+        elif team_score == opp_score:
             result = 'D'
         else:
             result = 'L'
 
-        rec = home_record if goz_position == 'home' else away_record
+        rec = home_record if team_position == 'home' else away_record
         rec[result] += 1
-        rec['GF'] += goz_score
+        rec['GF'] += team_score
         rec['GA'] += opp_score
 
-        if first_goal_team == 'goztepe':
+        if first_goal_team == 'team':
             after_scoring_first['played'] += 1
             after_scoring_first[result] += 1
         elif first_goal_team == 'opponent':
             after_conceding_first['played'] += 1
             after_conceding_first[result] += 1
 
-    _cache = {
+    res = {
         'home_record': home_record,
         'away_record': away_record,
         'conceded_bands': conceded_bands,
@@ -143,4 +143,5 @@ def calc_why_we_lose():
         'after_scoring_first': after_scoring_first,
         'after_conceding_first': after_conceding_first,
     }
-    return _cache
+    _cache_by_team[team_name] = res
+    return res
