@@ -1,0 +1,28 @@
+@media print {
+    /* Hide navigation and buttons */
+    .navbar, .nav-tabs, .btn-print, .no-print, header, .footer { display: none !important; }
+    
+    /* Reset container constraints */
+    .container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+    
+    /* Card styling adjustment */
+    .card { border: none !important; break-inside: avoid; page-break-inside: avoid; }
+    
+    /* Ensure high contrast */
+    body { background-color: white !important; color: black !important; }
+    h1, h2, h3, h5, p, label, .coach-title, .coach-brief-text { color: black !important; }
+    .coach-brief { border: 1px solid #999 !important; background: white !important; box-shadow: none !important; }
+    .coach-brief-item { border: 1px solid #ddd !important; background: white !important; break-inside: avoid; }
+    .coach-eyebrow, .coach-brief-label { color: #8a5a00 !important; }
+    
+    /* CRITICAL: By default, Dash/Bootstrap tabs hide non-active content with display: none.
+       We want to KEEP this behavior to print only the active tab.
+       However, we must ensure the ACTIVE tab content is visible and takes up full width.
+    */
+    .tab-content { display: block !important; }
+    .tab-pane.active { display: block !important; opacity: 1 !important; visibility: visible !important; }
+    .tab-pane:not(.active) { display: none !important; }
+
+    /* Fix potential graph sizing issues */
+    .js-plotly-plot { width: 100% !important; }
+}

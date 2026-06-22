@@ -1,26 +1,84 @@
-# Data files - private
+# ──────────────────────────────────────────────
+# Data — private match data, large files
+# ──────────────────────────────────────────────
 raw_data/
 
-# Logos & assets - private
-assets/
-göztepehub/assets/
+# ──────────────────────────────────────────────
+# Assets — ignore binary images (logos) but TRACK
+# stylesheets and scripts (they live in assets/)
+# ──────────────────────────────────────────────
+assets/*.png
+assets/*.jpg
+assets/*.jpeg
+assets/*.gif
+assets/*.svg
+assets/*.webp
+assets/*.ico
+göztepehub/assets/*.png
+göztepehub/assets/*.jpg
+göztepehub/assets/*.jpeg
+göztepehub/assets/*.gif
+göztepehub/assets/*.svg
+göztepehub/assets/*.webp
+göztepehub/assets/*.ico
 
-# Python cache
+# ──────────────────────────────────────────────
+# Trained models — large binaries
+# (use Git LFS if you ever want these tracked)
+# ──────────────────────────────────────────────
+utils/tactiq_xg_model.json
+utils/tactiq_obv_for_model.json
+utils/tactiq_obv_against_model.json
+
+# ──────────────────────────────────────────────
+# Python
+# ──────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
-.pytest_cache/
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
 
-# Environment
+# Test & lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ──────────────────────────────────────────────
+# Environment & secrets
+# ──────────────────────────────────────────────
 .env
 *.env
 venv/
 .venv/
 
-# OS
-.DS_Store
+# ──────────────────────────────────────────────
+# Editor / IDE
+# ──────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+*.swp
+*.swo
 
-# Models (large files)
-utils/tactiq_xg_model.json
-utils/tactiq_obv_for_model.json
-utils/tactiq_obv_against_model.json
+# ──────────────────────────────────────────────
+# OS
+# ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ──────────────────────────────────────────────
+# Logs
+# ──────────────────────────────────────────────
+*.log
