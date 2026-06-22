@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>tactIQ | Football Analytics</title>
+    <meta
+      name="description"
+      content="tactIQ is a Dash football analytics platform for match, team, player, scouting, and trend analysis."
+    >
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Football analytics platform</p>
+          <h1>tactIQ</h1>
+          <p class="lead">
+            A Dash-based analytics workspace for Turkish Super Lig match reports,
+            team profiles, player analysis, scouting, and Goztepe-specific workflows.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/HazanSerifli9/tactIQ">View on GitHub</a>
+            <a class="button" href="#run">Run locally</a>
+          </div>
+        </div>
+
+        <div class="dashboard-preview" aria-label="tactIQ dashboard feature preview">
+          <div class="preview-topbar">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="preview-grid">
+            <article>
+              <small>xG</small>
+              <strong>1.84</strong>
+              <span>shot quality</span>
+            </article>
+            <article>
+              <small>PPDA</small>
+              <strong>8.7</strong>
+              <span>press intensity</span>
+            </article>
+            <article class="wide">
+              <small>Match Report</small>
+              <strong>Chance creation, tempo, transitions</strong>
+              <span>coach-ready tactical summaries</span>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>What it includes</h2>
+        <div class="cards">
+          <article>
+            <h3>Main tactIQ app</h3>
+            <p>Fixtures, match reports, team analysis, player analysis, standings, Wyscout views, and transition animations.</p>
+          </article>
+          <article>
+            <h3>Goztepe Hub</h3>
+            <p>Pre-match scouting, rival scout, post-match reporting, and trend tracking for Goztepe workflows.</p>
+          </article>
+          <article>
+            <h3>Analytics engine</h3>
+            <p>Custom xG inference, possession chains, xT, PPDA, field tilt, style classification, and visual reports.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section run" id="run">
+        <h2>Run locally</h2>
+        <p>
+          GitHub Pages is static, so it cannot run the Dash server. Clone the repository and start
+          the apps locally:
+        </p>
+        <pre><code>python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+python göztepehub/app.py</code></pre>
+      </section>
+    </main>
+  </body>
+</html>

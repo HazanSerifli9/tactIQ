@@ -27,8 +27,6 @@ göztepehub/assets/*.ico
 # (use Git LFS if you ever want these tracked)
 # ──────────────────────────────────────────────
 utils/tactiq_xg_model.json
-utils/tactiq_obv_for_model.json
-utils/tactiq_obv_against_model.json
 
 # ──────────────────────────────────────────────
 # Python

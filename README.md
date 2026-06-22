@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 - Match event data as `.parquet` files under `raw_data/`
 - Team logos under `assets/` and `göztepehub/assets/`
-- Two trained models under `utils/`: `tactiq_xg_model.json`, `tactiq_obv_for_model.json`, `tactiq_obv_against_model.json`
+- Optional trained xG model under `utils/`: `tactiq_xg_model.json`
 
 ## Running
 
@@ -59,6 +59,12 @@ python göztepehub/app.py
 
 The tactIQ navbar links to `http://127.0.0.1:8051` for the Göztepe Hub, so start both when you want cross-navigation.
 
+## GitHub Pages
+
+This repository includes a static GitHub Pages site in `docs/`. Pages can present the project, but it cannot run the Dash server. After pushing to `main`, enable Pages with **Source: GitHub Actions** in the repository settings. The site will deploy to:
+
+`https://hazanserifli9.github.io/tactIQ/`
+
 ## Dependencies
 
 Core stack:
@@ -66,4 +72,4 @@ Core stack:
 - **Dash** + **dash-bootstrap-components** + **plotly** — web app and interactive charts
 - **pandas**, **numpy**, **scipy**, **pyarrow** — data processing and parquet I/O
 - **matplotlib**, **seaborn**, **mplsoccer**, **highlight-text**, **Pillow** — static pitch plots and rendering
-- **scikit-learn**, **xgboost** — xG and OBV models
+- **scikit-learn**, **xgboost** — custom xG model training/inference
