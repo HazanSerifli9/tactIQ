@@ -59,12 +59,6 @@ python göztepehub/app.py
 
 The tactIQ navbar links to `http://127.0.0.1:8051` for the Göztepe Hub, so start both when you want cross-navigation.
 
-## GitHub Pages
-
-This repository includes a static GitHub Pages site in `docs/`. Pages can present the project, but it cannot run the Dash server. After pushing to `main`, enable Pages with **Source: GitHub Actions** in the repository settings. The site will deploy to:
-
-`https://hazanserifli9.github.io/tactIQ/`
-
 ## Dependencies
 
 Core stack:
