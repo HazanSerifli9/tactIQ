@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 TACTIQ_BG    = "#1a1a2e"
 CARD_BG      = "#16213e"
-ACCENT       = "#FDE636"
+ACCENT       = "#fbbf24"
 TEXT_WHITE   = "#ffffff"
 TEXT_MUTED   = "#9ca3af"
 

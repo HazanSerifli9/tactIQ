@@ -378,7 +378,8 @@ def _draw_possession_line_height(matches, team_name, rival_label):
     mid_lh, mid_len, mid_wid = _estimate_dimensions(df, team_name, 'mid')
     f3_lh, f3_len, f3_wid = _estimate_dimensions(df, team_name, 'f3')
     
-    fig, axes = plt.subplots(1, 3, figsize=(14, 8.5), facecolor='#0e1b0f')
+    # Three square pitches side-by-side — figure ratio ~3:1 keeps them filling the canvas
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.2), facecolor='#0e1b0f')
     
     phases = [
         ('Build Up Low', low_lh, low_len, low_wid),

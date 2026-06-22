@@ -1,4 +1,3 @@
-
 import dash
 from dash import html
 import dash_bootstrap_components as dbc
@@ -6,27 +5,95 @@ from utils.data import extract_fixture_data
 
 dash.register_page(__name__, path='/fixtures', title='TactIQ | Fixtures')
 
-def layout():
-    content = []
-    
-    content.append(html.Header([
-        html.Div("2025-2026 Season", style={"color": "var(--accent-color)", "fontWeight": "600", "textTransform": "uppercase", "letterSpacing": "2px"}),
-        html.H1("Süper Lig Fixtures", style={"fontSize": "3rem", "marginBottom": "10px"}),
-        html.P("Complete schedule and match results.", style={"color": "var(--text-secondary)"})
-    ], style={"textAlign": "center", "marginBottom": "50px"}))
 
-    modal = dbc.Modal([
-        dbc.ModalHeader(dbc.ModalTitle("Match Statistics", id="modal-title"), close_button=True),
-        dbc.ModalBody(id="modal-body"),
-        dbc.ModalFooter(
-            dbc.Button("View Detailed Analysis", id="modal-analysis-btn", href="#", external_link=True, color="danger")
-        )
-    ], id="stats-modal", size="lg", is_open=False, centered=True)
-    content.append(modal)
-    
+def layout():
+    content = [
+        html.Header([
+            html.Div("2025-2026 Season", className="tq-eyebrow"),
+            html.H1("Süper Lig Fixtures", className="tq-page-title tq-page-title--lg"),
+            html.P("Complete schedule and match results.", className="tq-page-subtitle"),
+        ], className="tq-page-header"),
+        dbc.Modal([
+            dbc.ModalHeader(dbc.ModalTitle("Match Statistics", id="modal-title"), close_button=True),
+            dbc.ModalBody(id="modal-body"),
+            dbc.ModalFooter(
+                dbc.Button("View Detailed Analysis", id="modal-analysis-btn", href="#",
+                           external_link=True, color="danger")
+            ),
+        ], id="stats-modal", size="lg", is_open=False, centered=True),
+    ]
+
     content.extend(_fixture_sections())
 
-    return html.Div(content, className="container", style={"maxWidth": "1200px", "margin": "0 auto", "padding": "20px"})
+    return html.Div(content, className="tq-page tq-page--narrow")
+
+
+def _stat_row(label, home_val, away_val):
+    return html.Div([
+        html.Span(home_val),
+        html.Small(label, className="text-muted"),
+        html.Span(away_val),
+    ], className="tq-stat-row")
+
+
+def _key_player_row(player):
+    return html.Div([
+        html.Span(player['name'], className="tq-keyplayer-row__name"),
+        html.Span(player['reason'], className="tq-keyplayer-row__reason"),
+    ], className="tq-keyplayer-row")
+
+
+def _match_card(match):
+    s1, s2 = match['stats']['team1'], match['stats']['team2']
+    return html.Div([
+        html.Div([
+            html.Span("Finished", className="tq-match-card__status"),
+            html.Span(f"{match['date']} • {match['time']}", className="tq-match-card__kickoff"),
+        ], className="tq-match-card__meta"),
+
+        html.Div([
+            html.Div([
+                html.Img(src=f"/{match['logos'][0]}", className="tq-match-card__logo"),
+                html.Span(match['team_names'][0], className="tq-match-card__team-name"),
+            ], className="tq-match-card__team"),
+
+            html.Div(
+                f"{s1['goals']} - {s2['goals']}",
+                className="tq-match-card__score",
+            ),
+
+            html.Div([
+                html.Img(src=f"/{match['logos'][1]}", className="tq-match-card__logo"),
+                html.Span(match['team_names'][1], className="tq-match-card__team-name"),
+            ], className="tq-match-card__team"),
+        ], className="tq-match-card__teams"),
+
+        html.Div(match['venue'], className="tq-match-card__venue"),
+
+        html.Div([
+            html.Hr(className="tq-match-card__hr"),
+
+            html.Div([
+                html.H5("Match Stats", className="tq-match-card__subheading"),
+                html.Div([
+                    _stat_row("Shots", s1['shots'], s2['shots']),
+                    _stat_row("On Target", s1['shots_on_target'], s2['shots_on_target']),
+                    _stat_row("Passes", s1['passes'], s2['passes']),
+                    _stat_row("Pass Acc.", f"{s1['pass_accuracy']}%", f"{s2['pass_accuracy']}%"),
+                ]),
+            ], style={"marginBottom": "20px"}),
+
+            html.Div([
+                html.H5("Top Players", className="tq-match-card__subheading"),
+                html.Div([_key_player_row(p) for p in match.get('key_players', [])[:3]]),
+            ]),
+
+            dbc.Button("Detailed Analysis →", href=f"/analysis/{match.get('source_file')}",
+                       color="danger", size="sm",
+                       style={"width": "100%", "marginTop": "20px"}),
+
+        ], className="tq-match-card__details"),
+    ], className="tq-match-card")
 
 
 def _fixture_sections():
@@ -34,83 +101,16 @@ def _fixture_sections():
 
     weeks = {}
     for m in matches:
-        w = m['week']
-        if w not in weeks:
-            weeks[w] = []
-        weeks[w].append(m)
+        weeks.setdefault(m['week'], []).append(m)
 
-    sorted_weeks = sorted(weeks.keys())
     content = []
-    for week in sorted_weeks:
-        content.append(html.H2(f"Week {week}", style={"borderLeft": "4px solid var(--accent-color)", "paddingLeft": "15px", "margin": "40px 0 20px"}))
-        
-        matches_in_week = weeks[week]
-        grid = html.Div(className="matches-grid", style={"display": "grid", "gridTemplateColumns": "repeat(auto-fit, minmax(300px, 1fr))", "gap": "20px"})
-        
-        cards = []
-        for i, match in enumerate(matches_in_week):
-            match.get('source_file', f'w{week}-m{i}')
-            
-            card = html.Div([
-                html.Div([
-                    html.Span("Finished", className="match-status", style={"background": "rgba(42, 157, 143, 0.2)", "color": "#2a9d8f", "padding": "4px 8px", "borderRadius": "4px", "fontSize": "0.75rem", "fontWeight": "700"}),
-                    html.Span(f"{match['date']} • {match['time']}", style={"color": "var(--text-secondary)", "fontSize": "0.85rem"})
-                ], style={"display": "flex", "justifyContent": "space-between", "marginBottom": "15px"}),
-                
-                html.Div([
-                    html.Div([
-                        html.Img(src=f"/{match['logos'][0]}", style={"height": "50px", "marginBottom": "5px"}),
-                        html.Span(match['team_names'][0], style={"fontWeight": "600", "fontSize": "0.9rem"})
-                    ], style={"display": "flex", "flexDirection": "column", "alignItems": "center", "flex": "1"}),
-                    
-                    html.Div([
-                        html.Span(f"{match['stats']['team1']['goals']} - {match['stats']['team2']['goals']}", style={"fontSize": "1.8rem", "fontWeight": "700", "color": "white"}), 
-                    ], style={"display": "flex", "flexDirection": "column", "alignItems": "center", "padding": "0 10px"}),
-                    
-                    html.Div([
-                        html.Img(src=f"/{match['logos'][1]}", style={"height": "50px", "marginBottom": "5px"}),
-                        html.Span(match['team_names'][1], style={"fontWeight": "600", "fontSize": "0.9rem"})
-                    ], style={"display": "flex", "flexDirection": "column", "alignItems": "center", "flex": "1"}),
-                ], style={"display": "flex", "alignItems": "center", "justifyContent": "space-between", "marginBottom": "20px"}),
-                
-                html.Div(match['venue'], style={"textAlign": "center", "color": "var(--text-secondary)", "fontSize": "0.8rem", "marginBottom": "15px"}),
-                
-
-                html.Div([
-                    html.Hr(style={"borderColor": "rgba(255,255,255,0.1)", "margin": "15px 0"}),
-                    
-                    html.Div([
-                        html.H5("Match Stats", style={"fontSize": "1rem", "color": "var(--accent-color)", "marginBottom": "10px"}),
-                        html.Div([
-                            html.Div([html.Span(str(match['stats']['team1']['shots'])), html.Small("Shots", className="text-muted"), html.Span(str(match['stats']['team2']['shots']))], className="d-flex justify-content-between", style={"fontSize": "0.85rem", "marginBottom": "5px"}),
-                            html.Div([html.Span(str(match['stats']['team1']['shots_on_target'])), html.Small("On Target", className="text-muted"), html.Span(str(match['stats']['team2']['shots_on_target']))], className="d-flex justify-content-between", style={"fontSize": "0.85rem", "marginBottom": "5px"}),
-                            html.Div([html.Span(str(match['stats']['team1']['passes'])), html.Small("Passes", className="text-muted"), html.Span(str(match['stats']['team2']['passes']))], className="d-flex justify-content-between", style={"fontSize": "0.85rem", "marginBottom": "5px"}),
-                            html.Div([html.Span(f"{match['stats']['team1']['pass_accuracy']}%"), html.Small("Pass Acc.", className="text-muted"), html.Span(f"{match['stats']['team2']['pass_accuracy']}%")], className="d-flex justify-content-between", style={"fontSize": "0.85rem", "marginBottom": "5px"}),
-                        ])
-                    ], style={"marginBottom": "20px"}),
-                    
-                    html.Div([
-                        html.H5("Top Players", style={"fontSize": "1rem", "color": "var(--accent-color)", "marginBottom": "10px"}),
-                        html.Div([
-                            html.Div([
-                                html.Span(p['name'], style={"fontWeight": "600"}),
-                                html.Span(p['reason'], style={"fontSize": "0.75rem", "color": "var(--text-secondary)", "marginLeft": "auto"})
-                            ], style={"display": "flex", "alignItems": "center", "marginBottom": "5px", "borderBottom": "1px solid rgba(255,255,255,0.05)", "paddingBottom": "3px"}) 
-                            for p in match.get('key_players', [])[:3]
-                        ])
-                    ]),
-                    
-                    dbc.Button("Detailed Analysis →", href=f"/analysis/{match.get('source_file')}", color="danger", size="sm", style={"width": "100%", "marginTop": "20px"})
-                    
-                ], style={"background": "rgba(0,0,0,0.2)", "borderRadius": "8px", "padding": "15px", "marginTop": "10px"}),
-
-                
-            ], className="match-card")
-            cards.append(card)
-        
-        grid.children = cards
-        content.append(grid)
+    for week in sorted(weeks):
+        content.append(html.H2(f"Week {week}", className="tq-week-heading"))
+        content.append(html.Div(
+            [_match_card(m) for m in weeks[week]],
+            className="tq-matches-grid",
+        ))
 
     if not content:
-        return html.Div("No matches found.", style={"color": "var(--text-secondary)", "textAlign": "center", "padding": "40px"})
+        return [html.Div("No matches found.", className="tq-plot-placeholder")]
     return content

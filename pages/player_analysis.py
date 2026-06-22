@@ -33,7 +33,7 @@ def layout():
                     className="text-white fw-bold mb-3 border-bottom border-secondary pb-2"),
             dbc.Row([
                 dbc.Col([
-                    dcc.Loading(html.Div(id="pa-top-players"), type="circle", color="#FDE636"),
+                    dcc.Loading(html.Div(id="pa-top-players"), type="circle", color="#fbbf24"),
                 ], width=12),
             ], className="mb-5"),
         ], fluid=True),
@@ -43,12 +43,12 @@ def layout():
                     className="text-white fw-bold mb-3 border-bottom border-secondary pb-2"),
             dbc.Row([
                 dbc.Col([
-                    dcc.Loading(html.Div(id="pa-zonal"), type="circle", color="#FDE636"),
+                    dcc.Loading(html.Div(id="pa-zonal"), type="circle", color="#fbbf24"),
                 ], width=12),
             ], className="mb-4"),
             dbc.Row([
                 dbc.Col([
-                    dcc.Loading(html.Div(id="pa-box-entry"), type="circle", color="#FDE636"),
+                    dcc.Loading(html.Div(id="pa-box-entry"), type="circle", color="#fbbf24"),
                 ], width=12),
             ], className="mb-5"),
         ], fluid=True),

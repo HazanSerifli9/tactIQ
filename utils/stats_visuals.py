@@ -25,8 +25,8 @@ from utils.cache import disk_cache
 # --- Theme Configuration ---
 TACTIQ_BG = '#313332'
 TACTIQ_TEXT = 'white'
-TACTIQ_ACCENT = '#FDE636' # Gold
-TACTIQ_COLORS = ["#313332","#47516B", "#848178", "#B2A66F", "#FDE636"]
+TACTIQ_ACCENT = '#fbbf24' # Gold
+TACTIQ_COLORS = ["#313332","#47516B", "#848178", "#B2A66F", "#fbbf24"]
 
 CustomCmap = mpl.colors.LinearSegmentedColormap.from_list("", TACTIQ_COLORS)
 
@@ -513,7 +513,7 @@ def generate_style_metrics_table() -> Optional[str]:
             (on_x0, -CELL_GAP),
             on_x1 - on_x0,
             band_h,
-            color='#FDE636',
+            color='#fbbf24',
             alpha=0.04,
             zorder=0
         )
@@ -632,7 +632,7 @@ def generate_style_metrics_table() -> Optional[str]:
     ax.plot(
         [div_x, div_x],
         [-CELL_GAP / 2, n_teams * ROW_STEP],
-        color='#FDE636',
+        color='#fbbf24',
         lw=1.8,
         alpha=0.6,
         zorder=4
@@ -669,7 +669,7 @@ def generate_style_metrics_table() -> Optional[str]:
     off_mid_fig = 0.03 + (LEFT + 7.5 * COL_STEP) / _xlim_max * _ax_x_span
 
     fig.text(on_mid_fig,  0.905, '◄── ON THE BALL ──►',
-             ha='center', va='center', color='#FDE636',
+             ha='center', va='center', color='#fbbf24',
              fontsize=11, fontweight='bold')
     fig.text(off_mid_fig, 0.905, '◄── OFF THE BALL ──►',
              ha='center', va='center', color='#60a5fa',

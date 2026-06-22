@@ -15,10 +15,11 @@ try:
 except Exception:
     pass # Prevent crash if dynamically imported within a callback
 
+
 def layout(match_id=None):
     if not match_id:
         return html.Div("Match ID not provided.")
-    
+
     decoded_match_id = unquote(match_id)
 
     df = get_match_dataframe(decoded_match_id)
@@ -27,7 +28,7 @@ def layout(match_id=None):
 
     teams = df['team_name'].unique()
     teams = [t for t in teams if isinstance(t, str)]
-    
+
     if len(teams) < 2:
         return html.Div("Insufficient team data in file.")
 
@@ -59,7 +60,8 @@ def layout(match_id=None):
         "BDP": metrics.calculate_bdp(df, away_team),
     }
 
-    # Wyscout overrides — prefer Wyscout for any metric it provides (except for Week 34 where we use custom model)
+    # Wyscout overrides — prefer Wyscout for any metric it provides
+    # (except for Week 34 where we use the custom model)
     ws = None
     has_possession_override = False
     match_week = df['week'].iloc[0] if 'week' in df.columns and not df.empty else None
@@ -87,71 +89,62 @@ def layout(match_id=None):
 
     def create_headline_card(question, metric_name, h_val, a_val, note):
         return html.Div([
-            html.Div(question, style={"fontSize": "0.7rem", "color": "#888", "textTransform": "uppercase",
-                                      "letterSpacing": "1px", "marginBottom": "10px"}),
+            html.Div(question, className="mr-headline-card__question"),
             html.Div([
                 html.Div([
-                    html.Div(clean_name(home_team), style={"fontSize": "0.62rem", "color": "#fbbf24",
-                                                           "textTransform": "uppercase", "letterSpacing": "0.5px",
-                                                           "marginBottom": "2px", "fontWeight": "600"}),
-                    html.Span(f"{h_val}", style={"fontSize": "2.4rem", "fontWeight": "bold", "color": "#fbbf24"}),
-                ], style={"textAlign": "center"}),
-                html.Span(" — ", style={"color": "#444", "margin": "0 10px", "fontSize": "1.5rem", "alignSelf": "center"}),
+                    html.Div(clean_name(home_team), className="mr-team-label mr-team-label--home"),
+                    html.Span(f"{h_val}", className="mr-big-number mr-big-number--home"),
+                ], className="mr-headline-card__team"),
+                html.Span(" — ", className="mr-headline-card__dash"),
                 html.Div([
-                    html.Div(clean_name(away_team), style={"fontSize": "0.62rem", "color": "#e5e7eb",
-                                                           "textTransform": "uppercase", "letterSpacing": "0.5px",
-                                                           "marginBottom": "2px", "fontWeight": "600"}),
-                    html.Span(f"{a_val}", style={"fontSize": "2.4rem", "fontWeight": "bold", "color": "white"}),
-                ], style={"textAlign": "center"}),
-            ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "margin": "8px 0"}),
-            html.Div(metric_name, style={"fontSize": "0.85rem", "color": "#aaa", "fontWeight": "600"}),
-            html.Div(note, style={"fontSize": "0.7rem", "color": "#666", "marginTop": "4px", "lineHeight": "1.4"}),
-        ], style={
-            "background": "rgba(14,18,24,0.8)", "border": "1px solid rgba(255,255,255,0.12)",
-            "borderRadius": "16px", "padding": "28px 20px", "textAlign": "center",
-            "flex": "1", "minWidth": "200px",
-        })
+                    html.Div(clean_name(away_team), className="mr-team-label mr-team-label--away"),
+                    html.Span(f"{a_val}", className="mr-big-number mr-big-number--away"),
+                ], className="mr-headline-card__team"),
+            ], className="mr-headline-card__team-pair"),
+            html.Div(metric_name, className="mr-headline-card__metric"),
+            html.Div(note, className="mr-headline-card__note"),
+        ], className="mr-headline-card")
 
     field_tilt_title = "Possession %" if has_possession_override else "Territorial Control (Field Tilt %)"
-    field_tilt_note = "Percentage of ball possession from Wyscout" if has_possession_override else "% of play spent in the attacking half — higher is better"
+    field_tilt_note = ("Percentage of ball possession from Wyscout" if has_possession_override
+                      else "% of play spent in the attacking half — higher is better")
 
     kpi_section = html.Div([
-        html.P("3 things that decide this match", style={
-            "color": "#555", "textAlign": "center", "marginBottom": "10px",
-            "fontSize": "0.8rem", "textTransform": "uppercase", "letterSpacing": "2px",
-        }),
+        html.P("3 things that decide this match", className="mr-3-things"),
         html.Div([
-            html.Span("●", style={"color": "#fbbf24", "marginRight": "4px"}),
-            html.Span(clean_name(home_team), style={"color": "#fbbf24", "fontSize": "0.75rem", "fontWeight": "600", "marginRight": "20px"}),
-            html.Span("●", style={"color": "#e5e7eb", "marginRight": "4px"}),
-            html.Span(clean_name(away_team), style={"color": "#e5e7eb", "fontSize": "0.75rem", "fontWeight": "600"}),
-        ], style={"textAlign": "center", "marginBottom": "20px"}),
-        # ── 3 headline questions ──
+            html.Span("●", className="mr-legend-row__dot",
+                      style={"color": "var(--accent-gold)"}),
+            html.Span(clean_name(home_team),
+                      className="mr-legend-row__name mr-legend-row__name--home"),
+            html.Span("●", className="mr-legend-row__dot", style={"color": "#e5e7eb"}),
+            html.Span(clean_name(away_team),
+                      className="mr-legend-row__name mr-legend-row__name--away"),
+        ], className="mr-legend-row"),
+        # 3 headline questions
         html.Div([
             create_headline_card(
                 "Did we dominate?",
                 field_tilt_title,
                 f"{home_metrics['Field Tilt']}%", f"{away_metrics['Field Tilt']}%",
-                field_tilt_note
+                field_tilt_note,
             ),
             create_headline_card(
                 "Did we create chances?",
                 "Expected Goals (xG)",
                 home_metrics["xG"], away_metrics["xG"],
-                "Quality × quantity of shots — 1.0 = one expected goal"
+                "Quality × quantity of shots — 1.0 = one expected goal",
             ),
             create_headline_card(
                 "Did we defend well?",
                 "Pressing Intensity (PPDA)",
                 home_metrics["PPDA"], away_metrics["PPDA"],
-                "Passes allowed per defensive action — lower = pressed harder"
+                "Passes allowed per defensive action — lower = pressed harder",
             ),
-        ], style={"display": "flex", "gap": "16px", "flexWrap": "wrap",
-                  "justifyContent": "center", "marginBottom": "24px"}),
+        ], className="mr-kpi-grid"),
     ])
 
     plots = {}
-    
+
     def safe_plot(func, *args):
         try:
             return func(*args)
@@ -172,11 +165,11 @@ def layout(match_id=None):
 
     plots["shot_map"] = safe_plot(visuals.plot_match_shot_map, df, home_team, away_team)
     plots["territorial_voronoi"] = safe_plot(visuals.plot_pitch_dominance, df, home_team, away_team)
-    
+
     h_goals = len(df[(df['team_name'] == home_team) & (df['type_id'] == 16)])
     a_goals = len(df[(df['team_name'] == away_team) & (df['type_id'] == 16)])
     plots["player_dashboard"] = safe_plot(visuals.plot_player_dashboard_bars, df, home_team, away_team, h_goals, a_goals)
-    
+
     home_tempo = tempo_data.process_tempo_network(df, home_team)
     away_tempo = tempo_data.process_tempo_network(df, away_team)
 
@@ -199,14 +192,16 @@ def layout(match_id=None):
     def make_tempo_table(t_data):
         profiles = t_data.get("profiles", [])
         if not profiles:
-            return html.Div("No tempo data available", style={"color": "#888", "fontSize": "0.85rem"})
-        coach_roles = {"Metronome": "Playmaker", "Direct": "Direct Passer", "Recycler": "Safe Passer", "Connector": "Link Player"}
-        role_colors = {"Playmaker": "#3b82f6", "Direct Passer": "#ef4444", "Safe Passer": "#a0aec0", "Link Player": "#fbbf24"}
+            return html.Div("No tempo data available", className="mr-tempo-empty")
+        coach_roles = {"Metronome": "Playmaker", "Direct": "Direct Passer",
+                       "Recycler": "Safe Passer", "Connector": "Link Player"}
+        role_colors = {"Playmaker": "#3b82f6", "Direct Passer": "#ef4444",
+                       "Safe Passer": "#a0aec0", "Link Player": "#fbbf24"}
         rows = [html.Tr([
-            html.Th("Player",  style={"textAlign": "left",   "padding": "8px 10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
-            html.Th("Release", style={"textAlign": "center", "padding": "8px 10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
-            html.Th("Carry",   style={"textAlign": "center", "padding": "8px 10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
-            html.Th("Style",   style={"textAlign": "center", "padding": "8px 10px", "borderBottom": "1px solid #444", "color": "#e5e7eb"}),
+            html.Th("Player"),
+            html.Th("Release"),
+            html.Th("Carry"),
+            html.Th("Style"),
         ])]
         for p in profiles:
             cr = coach_roles.get(p.get("Role", ""), p.get("Role", ""))
@@ -214,94 +209,88 @@ def layout(match_id=None):
             j  = p.get("jersey_number")
             display = f"#{int(j)}" if j is not None else p["Player"]
             rows.append(html.Tr([
-                html.Td(display,           style={"padding": "7px 10px", "color": "#d1d5db"}),
-                html.Td(f"{p['TTRP']}s",   style={"textAlign": "center", "padding": "7px 10px", "color": "#fbbf24"}),
-                html.Td(f"+{p['Carry']}m", style={"textAlign": "center", "padding": "7px 10px", "color": "#22c55e"}),
-                html.Td(cr,                style={"textAlign": "center", "padding": "7px 10px", "color": rc}),
-            ], style={"borderBottom": "1px solid rgba(255,255,255,0.05)"}))
+                html.Td(display),
+                html.Td(f"{p['TTRP']}s", className="mr-tempo-table__release"),
+                html.Td(f"+{p['Carry']}m", className="mr-tempo-table__carry"),
+                html.Td(cr, style={"color": rc}),
+            ]))
         ttrp = t_data.get("team_avg_ttrp", 0)
         conn = t_data.get("team_total_connections", 0)
         rows.append(html.Tr([
-            html.Td(f"Avg Release: {ttrp}s  |  {conn} key connections", colSpan=4,
-                    style={"textAlign": "center", "padding": "10px", "color": "#ef4444",
-                           "fontWeight": "bold", "fontSize": "0.8rem", "background": "rgba(239,68,68,0.05)"})
+            html.Td(f"Avg Release: {ttrp}s  |  {conn} key connections",
+                    colSpan=4, className="mr-tempo-table__footer"),
         ]))
-        return html.Table(rows, style={"width": "100%", "borderCollapse": "collapse", "fontSize": "0.82rem"})
+        return html.Table(rows, className="mr-tempo-table")
 
-    _img_style = {"width": "100%", "borderRadius": "12px", "border": "1px solid var(--border-color)"}
-
-    def team_label(name, color):
-        return html.Div(clean_name(name), style={"color": color, "fontWeight": "700", "fontSize": "0.85rem",
-                        "textTransform": "uppercase", "letterSpacing": "0.5px", "marginBottom": "10px"})
+    def team_label(name, side):
+        return html.Div(clean_name(name), className=f"mr-team-tag mr-team-tag--{side}")
 
     def dual_section(title, description, h_key, a_key):
         return html.Div([
-            html.H3(title, style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "6px"}),
-            html.P(description, style={"color": "#9ca3af", "fontSize": "0.8rem", "marginBottom": "14px"}),
+            html.H3(title, className="mr-section-title"),
+            html.P(description, className="mr-section-desc"),
             html.Div([
-                html.Div([team_label(home_team, "#fbbf24"),
-                          html.Img(src=get_img(h_key), className="plot-img", style=_img_style)],
-                         style={"flex": "1", "minWidth": "280px"}),
-                html.Div([team_label(away_team, "#e5e7eb"),
-                          html.Img(src=get_img(a_key), className="plot-img", style=_img_style)],
-                         style={"flex": "1", "minWidth": "280px"}),
-            ], style={"display": "flex", "gap": "20px", "flexWrap": "wrap"}),
-        ], className="visualization-card", style={"marginBottom": "30px"})
+                html.Div([team_label(home_team, "home"),
+                          html.Img(src=get_img(h_key), className="plot-img mr-plot-img")],
+                         className="mr-dual-col__pane"),
+                html.Div([team_label(away_team, "away"),
+                          html.Img(src=get_img(a_key), className="plot-img mr-plot-img")],
+                         className="mr-dual-col__pane"),
+            ], className="mr-dual-col"),
+        ], className="visualization-card mr-card")
 
     # ── OFFENSIVE ──────────────────────────────────────────────────────────────
+    def _tempo_pane(team, t_data, side):
+        return html.Div([
+            team_label(team, side),
+            html.Img(src=get_img(f"{team}_hybrid"), className="plot-img mr-plot-img"),
+            html.Div([
+                html.Div("PLAYER TEMPO PROFILES", className="mr-tempo-title"),
+                make_tempo_table(t_data),
+            ], className="mr-tempo-card"),
+        ], className="mr-dual-col__pane")
+
     phase_offensive = html.Div([
         html.Div([
-            html.H3("Pass & Tempo Network", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "6px"}),
-            html.P("Who dictates play (node size), passing combinations (line thickness), speed of play (Red = Fast, Blue = Slow).",
-                   style={"color": "#9ca3af", "fontSize": "0.8rem", "marginBottom": "14px"}),
+            html.H3("Pass & Tempo Network", className="mr-section-title"),
+            html.P(
+                "Who dictates play (node size), passing combinations (line thickness), "
+                "speed of play (Red = Fast, Blue = Slow).",
+                className="mr-section-desc",
+            ),
             html.Div([
-                html.Div([
-                    team_label(home_team, "#fbbf24"),
-                    html.Img(src=get_img(f"{home_team}_hybrid"), className="plot-img", style=_img_style),
-                    html.Div([
-                        html.Div("PLAYER TEMPO PROFILES", style={"textAlign": "center", "fontWeight": "bold",
-                                                                   "color": "#e5e7eb", "marginBottom": "4px", "marginTop": "14px"}),
-                        make_tempo_table(home_tempo),
-                    ], style={"background": "rgba(255,255,255,0.03)", "padding": "12px", "borderRadius": "10px",
-                               "border": "1px solid var(--border-color)", "marginTop": "12px"}),
-                ], style={"flex": "1", "minWidth": "280px"}),
-                html.Div([
-                    team_label(away_team, "#e5e7eb"),
-                    html.Img(src=get_img(f"{away_team}_hybrid"), className="plot-img", style=_img_style),
-                    html.Div([
-                        html.Div("PLAYER TEMPO PROFILES", style={"textAlign": "center", "fontWeight": "bold",
-                                                                   "color": "#e5e7eb", "marginBottom": "4px", "marginTop": "14px"}),
-                        make_tempo_table(away_tempo),
-                    ], style={"background": "rgba(255,255,255,0.03)", "padding": "12px", "borderRadius": "10px",
-                               "border": "1px solid var(--border-color)", "marginTop": "12px"}),
-                ], style={"flex": "1", "minWidth": "280px"}),
-            ], style={"display": "flex", "gap": "20px", "flexWrap": "wrap"}),
-        ], className="visualization-card", style={"marginBottom": "30px"}),
+                _tempo_pane(home_team, home_tempo, "home"),
+                _tempo_pane(away_team, away_tempo, "away"),
+            ], className="mr-dual-col"),
+        ], className="visualization-card mr-card"),
         dual_section("Top xT Generators",
                      "Players who created the most threat through carries and passes.",
                      f"{home_team}_xt", f"{away_team}_xt"),
-    ], style={"padding": "20px 0"})
+    ], className="mr-phase")
 
     # ── DEFENSIVE ──────────────────────────────────────────────────────────────
     phase_defensive = html.Div([
         dual_section("Defensive Profile",
-                     "Event-data estimate of engagement height, defensive-action spread, half-to-half shift, and action breakdown.",
+                     "Event-data estimate of engagement height, defensive-action spread, "
+                     "half-to-half shift, and action breakdown.",
                      f"{home_team}_def_profile", f"{away_team}_def_profile"),
-    ], style={"padding": "20px 0"})
+    ], className="mr-phase")
 
     # ── OFFENSIVE TRANSITIONS ──────────────────────────────────────────────────
     phase_off_transitions = html.Div([
         dual_section("Offensive Transition Passes",
-                     "Forward passes launched from the defensive/mid zone — shows where each team starts attacks after winning possession.",
+                     "Forward passes launched from the defensive/mid zone — shows where each team "
+                     "starts attacks after winning possession.",
                      f"{home_team}_off_trans", f"{away_team}_off_trans"),
-    ], style={"padding": "20px 0"})
+    ], className="mr-phase")
 
     # ── DEFENSIVE TRANSITIONS ──────────────────────────────────────────────────
     phase_def_transitions = html.Div([
         dual_section("Pressing & Recovery Map",
-                     "Where each team's defensive actions (tackles, interceptions, recoveries, clearances) happen — reveals the pressing footprint and recovery zones.",
+                     "Where each team's defensive actions (tackles, interceptions, recoveries, "
+                     "clearances) happen — reveals the pressing footprint and recovery zones.",
                      f"{home_team}_pressing", f"{away_team}_pressing"),
-    ], style={"padding": "20px 0"})
+    ], className="mr-phase")
 
     # ── SET PIECES ─────────────────────────────────────────────────────────────
     phase_set_pieces = html.Div([
@@ -312,67 +301,68 @@ def layout(match_id=None):
                      "Dangerous free kick positions and delivery zones in the attacking third.",
                      f"{home_team}_free_kicks", f"{away_team}_free_kicks"),
         dual_section("Goal Kicks",
-                     "Goal-kick landing zone distribution: Inside penalty box, Short outside box (def third), and Long (beyond def third).",
+                     "Goal-kick landing zone distribution: Inside penalty box, Short outside box "
+                     "(def third), and Long (beyond def third).",
                      f"{home_team}_goal_kicks", f"{away_team}_goal_kicks"),
         dual_section("Penalties",
                      "Penalty attempts, result, taker, minute, and attempt location when available.",
                      f"{home_team}_penalties", f"{away_team}_penalties"),
-    ], style={"padding": "20px 0"})
+    ], className="mr-phase")
 
     # ── FINAL LAYOUT ──────────────────────────────────────────────────────────
     dashboard_img = plots.get('player_dashboard', '')
     dashboard_content = html.Div([
-        html.H2("Top Players Dashboard", style={"color": "white", "textAlign": "center", "margin": "40px 0 30px"}),
-        html.Div([
-            html.Img(src=f"data:image/png;base64,{dashboard_img}",
-                     style={"width": "100%", "maxWidth": "1000px", "borderRadius": "12px",
-                            "border": "1px solid #444", "display": "block", "margin": "0 auto"})
-        ], style={"padding": "20px", "background": "rgba(0,0,0,0.2)", "borderRadius": "16px"})
+        html.H2("Top Players Dashboard", className="mr-dashboard-h2"),
+        html.Div(
+            html.Img(src=f"data:image/png;base64,{dashboard_img}", className="mr-overview-img-wrap"),
+            className="mr-dashboard-wrap",
+        ),
     ])
 
     return html.Div([
         dcc.Store(id='current-match-id', data=decoded_match_id),
         html.Header([
-            html.Div("Match Deep Dive", style={"color": "var(--accent-color)", "fontWeight": "600", "textTransform": "uppercase", "letterSpacing": "2px", "marginBottom": "16px"}),
+            html.Div("Match Deep Dive", className="mr-eyebrow"),
             html.Div([
-                html.Span(clean_name(home_team), style={"fontSize": "2rem", "fontWeight": "700", "color": "white"}),
+                html.Span(clean_name(home_team), className="mr-scoreline__team"),
                 html.Div([
-                    html.Span(str(h_goals), style={"fontSize": "3rem", "fontWeight": "900", "color": "#fbbf24"}),
-                    html.Span(" — ", style={"fontSize": "2rem", "color": "#555", "margin": "0 8px"}),
-                    html.Span(str(a_goals), style={"fontSize": "3rem", "fontWeight": "900", "color": "white"}),
-                ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "margin": "0 28px"}),
-                html.Span(clean_name(away_team), style={"fontSize": "2rem", "fontWeight": "700", "color": "white"}),
-            ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "marginBottom": "12px", "flexWrap": "wrap", "gap": "8px"}),
-            html.P("Advanced Tactical Visualizations & Pattern Analysis", style={"color": "var(--text-secondary)", "marginBottom": "16px"}),
-            dcc.Link("← Back to Hub", href="/analysis", style={"color": "var(--text-secondary)", "display": "inline-block"})
-        ], style={"textAlign": "center", "marginBottom": "40px"}),
+                    html.Span(str(h_goals), className="mr-scoreline__num mr-scoreline__num--home"),
+                    html.Span(" — ", className="mr-scoreline__sep"),
+                    html.Span(str(a_goals), className="mr-scoreline__num mr-scoreline__num--away"),
+                ], className="mr-scoreline__numbers"),
+                html.Span(clean_name(away_team), className="mr-scoreline__team"),
+            ], className="mr-scoreline"),
+            html.P("Advanced Tactical Visualizations & Pattern Analysis",
+                   className="mr-header__subtitle"),
+            dcc.Link("← Back to Hub", href="/analysis", className="mr-back-link"),
+        ], className="mr-header"),
 
         dbc.Tabs([
             dbc.Tab(label="Match Overview", children=[
                 html.Div([
                     kpi_section,
                     html.Div([
-                        html.H3("Shot Map & Stats", style={"color": "var(--accent-color)", "fontSize": "1.5rem", "marginBottom": "20px", "textAlign": "center"}),
-                        html.Img(src=f"data:image/png;base64,{plots.get('shot_map', '')}", className="plot-img",
-                                 style={"width": "100%", "maxWidth": "1000px", "margin": "0 auto", "display": "block",
-                                        "borderRadius": "12px", "border": "1px solid var(--border-color)"})
-                    ], className="visualization-card", style={"marginBottom": "40px", "marginTop": "20px"}),
+                        html.H3("Shot Map & Stats",
+                                className="mr-section-title mr-section-title--lg"),
+                        html.Img(src=f"data:image/png;base64,{plots.get('shot_map', '')}",
+                                 className="plot-img mr-overview-img-wrap"),
+                    ], className="visualization-card mr-card--overview"),
                     html.Div([
-                        html.H3("Territorial Flow (Voronoi Control)", style={"color": "var(--accent-color)", "fontSize": "1.5rem", "marginBottom": "20px", "textAlign": "center"}),
+                        html.H3("Territorial Flow (Voronoi Control)",
+                                className="mr-section-title mr-section-title--lg"),
                         html.P("Theoretical pitch footprint each team controls based on average positioning.",
-                               style={"color": "var(--text-secondary)", "textAlign": "center", "marginBottom": "20px"}),
-                        html.Img(src=f"data:image/png;base64,{plots.get('territorial_voronoi', '')}", className="plot-img",
-                                 style={"width": "100%", "maxWidth": "1000px", "margin": "0 auto", "display": "block",
-                                        "borderRadius": "12px", "border": "1px solid var(--border-color)"})
-                    ], className="visualization-card", style={"marginBottom": "40px"}),
+                               className="mr-section-desc mr-section-desc--center"),
+                        html.Img(src=f"data:image/png;base64,{plots.get('territorial_voronoi', '')}",
+                                 className="plot-img mr-overview-img-wrap"),
+                    ], className="visualization-card mr-card--overview"),
                     dashboard_content,
-                ], style={"paddingTop": "30px"})
+                ], className="mr-overview-pane")
             ], tab_style={"cursor": "pointer"}),
-            dbc.Tab(label="Offensive",               children=[html.Div(phase_offensive,       style={"paddingTop": "20px"})], tab_style={"cursor": "pointer"}),
-            dbc.Tab(label="Defensive",               children=[html.Div(phase_defensive,       style={"paddingTop": "20px"})], tab_style={"cursor": "pointer"}),
-            dbc.Tab(label="Offensive Transitions",   children=[html.Div(phase_off_transitions, style={"paddingTop": "20px"})], tab_style={"cursor": "pointer"}),
-            dbc.Tab(label="Defensive Transitions",   children=[html.Div(phase_def_transitions, style={"paddingTop": "20px"})], tab_style={"cursor": "pointer"}),
-            dbc.Tab(label="Set Pieces",              children=[html.Div(phase_set_pieces,      style={"paddingTop": "20px"})], tab_style={"cursor": "pointer"}),
-        ], className="mt-4 custom-tabs")
+            dbc.Tab(label="Offensive",             children=[html.Div(phase_offensive,       className="mr-tab-pane")], tab_style={"cursor": "pointer"}),
+            dbc.Tab(label="Defensive",             children=[html.Div(phase_defensive,       className="mr-tab-pane")], tab_style={"cursor": "pointer"}),
+            dbc.Tab(label="Offensive Transitions", children=[html.Div(phase_off_transitions, className="mr-tab-pane")], tab_style={"cursor": "pointer"}),
+            dbc.Tab(label="Defensive Transitions", children=[html.Div(phase_def_transitions, className="mr-tab-pane")], tab_style={"cursor": "pointer"}),
+            dbc.Tab(label="Set Pieces",            children=[html.Div(phase_set_pieces,      className="mr-tab-pane")], tab_style={"cursor": "pointer"}),
+        ], className="mt-4 custom-tabs"),
 
-    ], className="container", style={"maxWidth": "1400px", "margin": "0 auto", "padding": "20px"})
+    ], className="tq-page")
