@@ -7,8 +7,6 @@ import utils.visuals as visuals
 import utils.metrics as metrics
 import utils.tempo_data as tempo_data
 import utils.tempo_visuals as tempo_visuals
-import utils.obv_model as obv_model
-import utils.obv_visuals as obv_visuals
 
 from urllib.parse import unquote
 
@@ -49,7 +47,6 @@ def layout(match_id=None):
         "PPDA": metrics.calculate_ppda(df, home_team),
         "Field Tilt": metrics.calculate_field_tilt(df, home_team),
         "xT": metrics.calculate_xt(df, home_team),
-        "Prog Passes": metrics.calculate_progressive_passes(df, home_team),
         "BDP": metrics.calculate_bdp(df, home_team),
     }
 
@@ -59,7 +56,6 @@ def layout(match_id=None):
         "PPDA": metrics.calculate_ppda(df, away_team),
         "Field Tilt": metrics.calculate_field_tilt(df, away_team),
         "xT": metrics.calculate_xt(df, away_team),
-        "Prog Passes": metrics.calculate_progressive_passes(df, away_team),
         "BDP": metrics.calculate_bdp(df, away_team),
     }
 
@@ -75,7 +71,6 @@ def layout(match_id=None):
                 ws_overrides = {
                     'xG':         'xg_for',
                     'PPDA':       'ppda',
-                    'Prog Passes':'progressive_passes',
                     'Field Tilt': 'possession_pct',
                 }
                 for metric_key, ws_key in ws_overrides.items():
@@ -184,22 +179,19 @@ def layout(match_id=None):
     
     home_tempo = tempo_data.process_tempo_network(df, home_team)
     away_tempo = tempo_data.process_tempo_network(df, away_team)
-    df_obv     = obv_model.calculate_obv(df)
 
     for team in [home_team, away_team]:
         t_data = home_tempo if team == home_team else away_tempo
-        plots[f"{team}_prog"]            = safe_plot(visuals.plot_progressive_pass_map, df, team)
         plots[f"{team}_hybrid"]          = safe_plot(tempo_visuals.plot_hybrid_pass_network, df, team, t_data)
         plots[f"{team}_xt"]              = safe_plot(visuals.plot_xt_leaders, df, team)
         plots[f"{team}_startxi"]         = safe_plot(visuals.plot_starting_xi, df, team)
         plots[f"{team}_def_profile"]     = safe_plot(visuals.plot_defensive_profile, df, team)
-        plots[f"{team}_obv_pitch"]       = safe_plot(obv_visuals.plot_obv_pitch,         df_obv,  team)
-        plots[f"{team}_obv_leaderboard"] = safe_plot(obv_visuals.plot_obv_leaderboard,   df_obv,  team)
         plots[f"{team}_pressing"]        = safe_plot(visuals.plot_pressing_map,             df, team)
         plots[f"{team}_off_trans"]       = safe_plot(visuals.plot_offensive_transition_map, df, team)
         plots[f"{team}_corners"]         = safe_plot(visuals.plot_set_pieces, df, team, "corners")
         plots[f"{team}_free_kicks"]      = safe_plot(visuals.plot_set_pieces, df, team, "free_kicks")
         plots[f"{team}_goal_kicks"]      = safe_plot(visuals.plot_goal_kicks_distribution, df, team)
+        plots[f"{team}_penalties"]       = safe_plot(visuals.plot_penalties, df, team)
 
     def get_img(key):
         return f"data:image/png;base64,{plots.get(key, '')}"
@@ -285,31 +277,15 @@ def layout(match_id=None):
                 ], style={"flex": "1", "minWidth": "280px"}),
             ], style={"display": "flex", "gap": "20px", "flexWrap": "wrap"}),
         ], className="visualization-card", style={"marginBottom": "30px"}),
-        dual_section("Progressive Passes",
-                     "Passes that advanced the ball significantly toward goal.",
-                     f"{home_team}_prog", f"{away_team}_prog"),
         dual_section("Top xT Generators",
                      "Players who created the most threat through carries and passes.",
                      f"{home_team}_xt", f"{away_team}_xt"),
-        html.Div([
-            html.H3("On-Ball Value (OBV)", style={"color": "var(--accent-color)", "fontSize": "1.2rem", "marginBottom": "6px"}),
-            html.P("How much each action shifted the probability of scoring or conceding. Green = positive, Red = negative.",
-                   style={"color": "#9ca3af", "fontSize": "0.8rem", "marginBottom": "14px"}),
-            html.Div([
-                html.Div([team_label(home_team, "#fbbf24"),
-                          html.Img(src=get_img(f"{home_team}_obv_pitch"),       className="plot-img", style=_img_style)],
-                         style={"flex": "1", "minWidth": "280px"}),
-                html.Div([team_label(away_team, "#e5e7eb"),
-                          html.Img(src=get_img(f"{away_team}_obv_pitch"),       className="plot-img", style=_img_style)],
-                         style={"flex": "1", "minWidth": "280px"}),
-            ], style={"display": "flex", "gap": "20px", "flexWrap": "wrap"}),
-        ], className="visualization-card", style={"marginBottom": "30px"}),
     ], style={"padding": "20px 0"})
 
     # ── DEFENSIVE ──────────────────────────────────────────────────────────────
     phase_defensive = html.Div([
         dual_section("Defensive Profile",
-                     "Block type, compactness, defensive line height shift between halves, and action breakdown.",
+                     "Event-data estimate of engagement height, defensive-action spread, half-to-half shift, and action breakdown.",
                      f"{home_team}_def_profile", f"{away_team}_def_profile"),
     ], style={"padding": "20px 0"})
 
@@ -338,6 +314,9 @@ def layout(match_id=None):
         dual_section("Goal Kicks",
                      "Goal-kick landing zone distribution: Inside penalty box, Short outside box (def third), and Long (beyond def third).",
                      f"{home_team}_goal_kicks", f"{away_team}_goal_kicks"),
+        dual_section("Penalties",
+                     "Penalty attempts, result, taker, minute, and attempt location when available.",
+                     f"{home_team}_penalties", f"{away_team}_penalties"),
     ], style={"padding": "20px 0"})
 
     # ── FINAL LAYOUT ──────────────────────────────────────────────────────────

@@ -40,6 +40,8 @@ GOAL_MOUTH_RIGHT_OPT       = 54.8
 GOAL_MOUTH_CENTER_OPT      = 50.0
 GOAL_MOUTH_HALF_SPAN_OPT   = GOAL_MOUTH_RIGHT_OPT - GOAL_MOUTH_CENTER_OPT
 
+PENALTY_SHOT_EVENTS = {'Goal', 'Saved Shot', 'Miss', 'Post', 'Penalty'}
+
 IGNORED_MACRO_CATEGORIES = {"match_admin", "stoppage_restart", "feed_meta"}
 IGNORED_EVENT_NAMES = {"deleted event"}
 
@@ -48,11 +50,69 @@ _RADAR_CACHE = {}
 _LEAGUE_CACHE = {'df': None, 'timestamp': 0, 'building': False, 'error': None}
 _LEAGUE_CACHE_LOCK = threading.Lock()
 _SEASON_STATS_CACHE = {}
+_PENALTY_RANK_CACHE = {'data': None, 'timestamp': 0}
+
+def _load_team_matches(team_name):
+    data_dir = get_data_dir()
+    match_dfs = []
+    try:
+        files = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
+    except Exception:
+        return match_dfs
+
+    for filename in files:
+        try:
+            df = pd.read_parquet(os.path.join(data_dir, filename))
+            if 'team_name' in df.columns and team_name in df['team_name'].unique():
+                match_dfs.append((filename, df))
+        except Exception:
+            continue
+    return match_dfs
 
 def _parse_opta_bool(val):
     if pd.isna(val) or val == 0 or val == '0' or val is False:
         return False
     return str(val).strip().lower() in ('si', '1', 'true', 'yes')
+
+def _event_seconds(row):
+    return float(row.get('time_min') or 0) * 60 + float(row.get('time_sec') or 0)
+
+def _is_penalty_attempt(row):
+    if not _parse_opta_bool(row.get('Penalty')):
+        return False
+
+    event = row.get('event')
+    type_id = row.get('type_id')
+    if event in PENALTY_SHOT_EVENTS:
+        return True
+    return type_id in [13, 14, 15, 16] and event not in {'Foul', 'Penalty faced', 'Save', 'Unknown'}
+
+def _collect_penalty_attempts(records, team_name):
+    attempts = []
+    seen = set()
+    for idx, row in enumerate(records):
+        if row.get('team_name') != team_name or not _is_penalty_attempt(row):
+            continue
+
+        period = int(row.get('period_id') or 0)
+        second_bucket = round(_event_seconds(row))
+        player = row.get('player_name') or ''
+        key = (period, second_bucket, player)
+        if key in seen:
+            continue
+        seen.add(key)
+        attempts.append((idx, row))
+    return attempts
+
+def _shot_side(goal_mouth_y):
+    y = _safe_float(goal_mouth_y)
+    if y is None:
+        return 'Unknown'
+    if y < 48:
+        return 'Left'
+    if y > 52:
+        return 'Right'
+    return 'Centre'
 
 def _get_season_stats(team_name):
     """
@@ -64,8 +124,7 @@ def _get_season_stats(team_name):
     if team_name in _SEASON_STATS_CACHE:
         return _SEASON_STATS_CACHE[team_name]
         
-    from göztepehub.utils.transitions_analysis import _load_opponent_matches
-    match_dfs = _load_opponent_matches(team_name)
+    match_dfs = _load_team_matches(team_name)
     
     all_actions = []
     all_aerials = []
@@ -75,6 +134,7 @@ def _get_season_stats(team_name):
     saved_penalties = 0
     missed_penalties = 0
     penalty_placements = []
+    penalty_takers = {}
     
     total_goalkicks = 0
     long_goalkicks = 0
@@ -125,6 +185,9 @@ def _get_season_stats(team_name):
         week = int(df['week'].iloc[0]) if 'week' in df.columns else 0
         
         records = df.to_dict('records')
+        penalty_attempt_indices = {
+            idx for idx, penalty_row in _collect_penalty_attempts(records, team_name)
+        }
         for i, r in enumerate(records):
             # Scored Goals origin
             if r['team_name'] == team_name and r['event'] == 'Goal':
@@ -152,21 +215,39 @@ def _get_season_stats(team_name):
                 if x <= 17.0 and 21.1 <= y <= 78.9:
                     all_aerials.append(1 if r.get('outcome') == 1 else 0)
                     
-            # Penalties
-            if r['team_name'] == team_name and r.get('type_id') in [13, 14, 15, 16] and _parse_opta_bool(r.get('Penalty')):
+            # Penalty attempts only. The feed also flags the foul, keeper
+            # "Penalty faced", save, and VAR/admin rows with Penalty == Si.
+            if i in penalty_attempt_indices:
+                taker = r.get('player_name') or 'Unknown'
+                event = r.get('event')
+                opponent = _clean(opp_name)
+                side = _shot_side(r.get(GOAL_MOUTH_Y_COL))
+                if taker not in penalty_takers:
+                    penalty_takers[taker] = {'total': 0, 'scored': 0, 'saved': 0, 'missed': 0}
+                penalty_takers[taker]['total'] += 1
+
                 total_penalties += 1
                 penalty_placements.append({
+                    'num': total_penalties,
                     'goal_mouth_y': r.get(GOAL_MOUTH_Y_COL),
                     'goal_mouth_z': r.get('Goal Mouth Z Coordinate'),
-                    'event': r['event'],
+                    'event': event,
+                    'player': taker,
+                    'opponent': opponent,
+                    'week': week,
+                    'minute': int(r.get('time_min') or 0),
+                    'side': side,
                 })
-                if r['event'] == 'Goal':
+                if event == 'Goal':
                     scored_penalties += 1
+                    penalty_takers[taker]['scored'] += 1
                 else:
-                    if _parse_opta_bool(r.get('Saved')) or r['event'] == 'Saved Shot':
+                    if _parse_opta_bool(r.get('Saved')) or event == 'Saved Shot':
                         saved_penalties += 1
+                        penalty_takers[taker]['saved'] += 1
                     else:
                         missed_penalties += 1
+                        penalty_takers[taker]['missed'] += 1
                         
             # Goalkicks
             if r['team_name'] == team_name and (r['event'] == 'Goal Kick' or _parse_opta_bool(r.get('Goal Kick'))):
@@ -335,6 +416,10 @@ def _get_season_stats(team_name):
         
     sorted_takers = sorted(corner_takers.items(), key=lambda x: x[1]['total'], reverse=True)[:3]
     sorted_targets = sorted(corner_targets.items(), key=lambda x: x[1]['targeted'], reverse=True)[:3]
+    sorted_penalty_takers = sorted(
+        penalty_takers.items(),
+        key=lambda x: (-x[1]['total'], -x[1]['scored'], x[0])
+    )
     
     from göztepehub.utils.buildup_analysis import get_opponent_buildup_analysis
     _, buildup_season = get_opponent_buildup_analysis(team_name)
@@ -345,6 +430,7 @@ def _get_season_stats(team_name):
             'total': total_penalties, 'scored': scored_penalties,
             'saved': saved_penalties, 'missed': missed_penalties,
             'placements': penalty_placements,
+            'takers': sorted_penalty_takers,
         },
         'goalkicks': {
             'total': total_goalkicks, 'long': long_goalkicks, 'short': short_goalkicks,
@@ -374,19 +460,21 @@ def _get_season_stats(team_name):
 
 
 RADAR_METRICS = [
-    ('goals_pg',    'Goals Scored',   True),
-    ('xg_pg',       'xG Created',     True),
-    ('shots_pg',    'Shots / Game',   True),
-    ('xga_pg',      'xGA Allowed',    False),
-    ('passes_pg',   'Pass Volume',    True),
-    ('pass_acc',    'Pass Accuracy',  True),
+    ('goals_pg',        'Goals',          True),
+    ('shots_pg',        'Shots',          True),
+    ('interceptions_pg','Interceptions',  True),
+    ('ball_rec_pg',     'Ball Recovery',  True),
+    ('ball_lost_pg',    'Ball Lost',      False),
+    ('passes_pg',       'Pass Volume',    True),
+    ('pass_acc',        'Pass Accuracy',  True),
 ]
 
 BENCH_METRICS = [
     ('goals_pg',    'Goals / Game',       True,  '{:.2f}'),
-    ('xg_pg',       'xG / Game',          True,  '{:.2f}'),
     ('shots_pg',    'Shots / Game',       True,  '{:.1f}'),
-    ('xga_pg',      'xGA / Game',         False, '{:.2f}'),
+    ('interceptions_pg', 'Interceptions', True,  '{:.1f}'),
+    ('ball_rec_pg', 'Ball Recoveries',    True,  '{:.1f}'),
+    ('ball_lost_pg','Ball Lost',          False, '{:.1f}'),
     ('passes_pg',   'Passes / Game',      True,  '{:.0f}'),
     ('pass_acc',    'Pass Accuracy',      True,  '{:.1f}%'),
 ]
@@ -419,10 +507,10 @@ PHASE_BENCH_METRICS = {
         ('tackles_pg',           'Tackles / Game',       True,  '{:.1f}'),
     ],
     'set-pieces-tab': [
-        ('xg_pg',       'xG / Game',      True,  '{:.2f}'),
-        ('shots_pg',    'Shots / Game',   True,  '{:.1f}'),
-        ('pass_acc',    'Pass Accuracy',  True,  '{:.1f}%'),
-        ('xga_pg',      'xGA / Game',     False, '{:.2f}'),
+        ('penalty_total',    'Penalties Won', True,  '{:.0f}'),
+        ('penalty_conv_pct', 'Penalty Conv.', True,  '{:.1f}%'),
+        ('xg_pg',           'xG / Game',      True,  '{:.2f}'),
+        ('xga_pg',          'xGA / Game',     False, '{:.2f}'),
     ],
 }
 
@@ -492,10 +580,20 @@ def _build_league_benchmarks():
             else:
                 n_goals = len(tdf[tdf['type_id'] == 16])
             n_tack  = len(tdf[tdf['type_id'] == 7])
+            n_int   = len(tdf[tdf['type_id'] == 8])
             n_rec   = len(tdf[tdf['type_id'] == 49])
             n_press = len(tdf[(tdf['type_id'] == 49) & (tdf['x'] > 50)])
+            n_lost  = len(tdf[
+                ((tdf['type_id'] == 1) & (tdf['outcome'] == 0)) |
+                (tdf['type_id'].isin([50, 51]))
+            ])
             xg  = tdf['xG'].sum() if 'xG' in tdf.columns else 0
             xga = odf['xG'].sum() if 'xG' in odf.columns else 0
+            penalty_attempts = [
+                row for _, row in _collect_penalty_attempts(df.to_dict('records'), team)
+            ]
+            n_pen = len(penalty_attempts)
+            n_pen_scored = sum(1 for row in penalty_attempts if row.get('event') == 'Goal')
             
             # Buildup outcomes
             from göztepehub.utils.buildup_analysis import analyze_buildup_for_match
@@ -514,12 +612,14 @@ def _build_league_benchmarks():
                 pass
 
             if team not in acc:
-                acc[team] = dict(m=0, p=0, s=0, sh=0, g=0, t=0, r=0, pr=0, xg=0, xga=0,
+                acc[team] = dict(m=0, p=0, s=0, sh=0, g=0, t=0, i=0, r=0, pr=0, lost=0, xg=0, xga=0,
+                                 pen=0, pen_scored=0,
                                  b_total=0, b_f3=0, b_shot=0, b_goal=0, b_turnover=0, b_danger=0)
             a = acc[team]
             a['m'] += 1; a['p'] += n_pass; a['s'] += n_succ; a['sh'] += n_shots
-            a['g'] += n_goals; a['t'] += n_tack; a['r'] += n_rec; a['pr'] += n_press
+            a['g'] += n_goals; a['t'] += n_tack; a['i'] += n_int; a['r'] += n_rec; a['pr'] += n_press; a['lost'] += n_lost
             a['xg'] += xg; a['xga'] += xga
+            a['pen'] += n_pen; a['pen_scored'] += n_pen_scored
             a['b_total'] += b_total
             a['b_f3'] += b_f3
             a['b_shot'] += b_shot
@@ -535,7 +635,11 @@ def _build_league_benchmarks():
             passes_pg=a['p']/m, pass_acc=a['s']/max(a['p'],1)*100,
             shots_pg=a['sh']/m, goals_pg=a['g']/m,
             xg_pg=a['xg']/m, xga_pg=a['xga']/m,
-            tackles_pg=a['t']/m, ball_rec_pg=a['r']/m, press_rec_pg=a['pr']/m,
+            tackles_pg=a['t']/m, interceptions_pg=a['i']/m,
+            ball_rec_pg=a['r']/m, press_rec_pg=a['pr']/m,
+            ball_lost_pg=a['lost']/m,
+            penalty_total=a['pen'],
+            penalty_conv_pct=a['pen_scored']/max(a['pen'], 1)*100,
             buildup_f3_pct=a['b_f3']/b_tot*100,
             buildup_shot_pct=a['b_shot']/b_tot*100,
             buildup_goal_pct=a['b_goal']/b_tot*100,
@@ -547,7 +651,8 @@ def _build_league_benchmarks():
 
 
 def _build_benchmark_radar(league_df, rival):
-    cache_key = f"radar_{rival}"
+    metric_key = "-".join(col for col, _, _ in RADAR_METRICS)
+    cache_key = f"radar_{rival}_{metric_key}"
     if cache_key in _RADAR_CACHE:
         return _RADAR_CACHE[cache_key]
 
@@ -691,7 +796,7 @@ def _build_benchmarking_section(rival, opp_name):
         ]),
         dbc.Row([
             dbc.Col([
-                html.Div("STYLE PROFILE — PERCENTILE RANK", style={
+                html.Div("MATCH METRICS — PERCENTILE RANK", style={
                     "fontSize": "0.72rem", "fontWeight": "700", "color": _GOLD,
                     "letterSpacing": "1px", "marginBottom": "8px", "textAlign": "center",
                 }),
@@ -1106,6 +1211,66 @@ def _build_phase_bench_section(active_tab, rival, opp_name):
     ])
 
 
+def _league_rank_for_metric(team, column, higher_is_better=True):
+    try:
+        league_df = _load_league_benchmarks()
+    except Exception:
+        return None, None
+    if league_df.empty or team not in league_df.index or column not in league_df.columns:
+        return None, None
+    rank = int(league_df[column].rank(ascending=not higher_is_better, method='min')[team])
+    return rank, len(league_df)
+
+
+def _penalty_total_rank(team):
+    if time.time() - _PENALTY_RANK_CACHE.get('timestamp', 0) < 3600:
+        data = _PENALTY_RANK_CACHE.get('data') or {}
+    else:
+        try:
+            data = {}
+            needed_cols = [
+                'team_name', 'Penalty', 'event', 'type_id',
+                'period_id', 'time_min', 'time_sec', 'player_name'
+            ]
+            for filename in os.listdir(get_data_dir()):
+                if not filename.endswith('.parquet'):
+                    continue
+                try:
+                    path = os.path.join(get_data_dir(), filename)
+                    available_cols = pd.read_parquet(path, columns=['team_name']).columns.tolist()
+                    if 'team_name' not in available_cols:
+                        continue
+                    try:
+                        df = pd.read_parquet(path, columns=needed_cols)
+                    except Exception:
+                        df = pd.read_parquet(path)
+                    records = df.to_dict('records')
+                    for team_name in df['team_name'].dropna().unique().tolist():
+                        if team_name == GOZTEPE:
+                            continue
+                        data.setdefault(team_name, 0)
+                        data[team_name] += len(_collect_penalty_attempts(records, team_name))
+                except Exception:
+                    continue
+            _PENALTY_RANK_CACHE['data'] = data
+            _PENALTY_RANK_CACHE['timestamp'] = time.time()
+        except Exception:
+            return None, None
+
+    if team not in data:
+        return None, None
+    ranked = sorted(data.items(), key=lambda item: (-item[1], item[0]))
+    rank_lookup = {}
+    last_value = None
+    last_rank = 0
+    for idx, (team_name, value) in enumerate(ranked, start=1):
+        if value != last_value:
+            last_rank = idx
+            last_value = value
+        rank_lookup[team_name] = last_rank
+    return rank_lookup.get(team), len(ranked)
+
+
 def _build_transitions_risk_pitch(transitions_map, is_att=True):
     """Matplotlib full-pitch 9-zone risk map for transitions."""
     fig, ax = plt.subplots(figsize=(8.5, 5.0), facecolor=_PITCH_BG)
@@ -1387,6 +1552,10 @@ def _draw_goal_mouth(ax, title, placements):
         ax.scatter([point[0]], [point[1]], s=82, color=color, marker=marker,
                    edgecolors='black', linewidths=0.8, alpha=0.94, zorder=5,
                    label=label)
+        if placement.get('num') is not None:
+            ax.text(point[0], point[1], str(placement.get('num')),
+                    color='white', fontsize=6, fontweight='bold',
+                    ha='center', va='center', zorder=6)
     ax.set_title(title, color='#fbbf24', fontsize=10, fontweight='bold', loc='left', pad=8)
     handles, labels = ax.get_legend_handles_labels()
     unique = dict(zip(labels, handles))
@@ -1479,6 +1648,90 @@ def _build_setpiece_overview(penalties, freekicks, goalkicks):
 
     fig.suptitle('SET-PIECE & RESTART VISUALS OVERVIEW', color='white',
                  fontsize=13, fontweight='bold', y=0.99)
+    return _fig_to_b64(fig)
+
+
+def _build_penalty_goal_mouth(penalties):
+    placements = penalties.get('placements', [])
+    fig, ax = plt.subplots(figsize=(10.5, 5.8), facecolor=_PITCH_BG)
+    ax.set_facecolor('#101913')
+
+    # Goal frame
+    ax.plot([0, 1], [0, 0], color='white', alpha=0.92, linewidth=3)
+    ax.plot([0, 0], [0, 1], color='white', alpha=0.92, linewidth=3)
+    ax.plot([1, 1], [0, 1], color='white', alpha=0.92, linewidth=3)
+    ax.plot([0, 1], [1, 1], color='white', alpha=0.92, linewidth=3)
+
+    # Net grid and zones
+    for x in np.linspace(0.2, 0.8, 4):
+        ax.plot([x, x], [0, 1], color='white', alpha=0.12, linewidth=1)
+    for y in np.linspace(0.25, 0.75, 3):
+        ax.plot([0, 1], [y, y], color='white', alpha=0.12, linewidth=1)
+    ax.axvline(0.5, color=_GOLD, alpha=0.25, linestyle='--', linewidth=1)
+
+    zone_label_color = (1, 1, 1, 0.55)
+    ax.text(0.17, -0.08, 'LEFT', color=zone_label_color, fontsize=8,
+            fontweight='bold', ha='center')
+    ax.text(0.50, -0.08, 'CENTRE', color=zone_label_color, fontsize=8,
+            fontweight='bold', ha='center')
+    ax.text(0.83, -0.08, 'RIGHT', color=zone_label_color, fontsize=8,
+            fontweight='bold', ha='center')
+
+    for placement in placements:
+        point = _goal_mouth_xy(placement)
+        if point is None:
+            continue
+        x, y = point
+        x = min(1.0, max(0.0, x))
+        y = min(1.0, max(0.0, y))
+        event = placement.get('event')
+        if event == 'Goal':
+            color, marker, label = _GREEN, 'o', 'Goal'
+        elif event == 'Saved Shot':
+            color, marker, label = _BLUE, 's', 'Saved'
+        else:
+            color, marker, label = _RED, 'X', 'Miss / Post'
+
+        ax.scatter([x], [y], s=240, color=color, marker=marker,
+                   edgecolors='black', linewidths=1.5, alpha=0.96,
+                   label=label, zorder=5)
+        num = placement.get('num')
+        if num is not None:
+            ax.text(x, y, str(num), color='white', fontsize=9,
+                    fontweight='900', ha='center', va='center', zorder=6)
+
+        player = placement.get('player')
+        minute = placement.get('minute')
+        if player:
+            label_text = f"{player.split()[-1]} {minute}'" if minute is not None else player.split()[-1]
+            ax.annotate(label_text, xy=(x, y), xytext=(0, 16), textcoords='offset points',
+                        color='white', fontsize=7, ha='center', va='bottom',
+                        arrowprops=dict(arrowstyle='-', color='white', alpha=0.22, lw=0.7),
+                        zorder=7)
+
+    handles, labels = ax.get_legend_handles_labels()
+    unique = dict(zip(labels, handles))
+    if unique:
+        legend = ax.legend(unique.values(), unique.keys(), loc='upper center',
+                           bbox_to_anchor=(0.5, -0.08), ncol=3, frameon=False,
+                           fontsize=8)
+        for text in legend.get_texts():
+            text.set_color('white')
+
+    ax.text(0.5, 1.12, 'PENALTY GOAL MOUTH', color=_GOLD,
+            fontsize=13, fontweight='bold', ha='center')
+    ax.text(0.5, 1.055,
+            f"{penalties.get('scored', 0)} scored | {penalties.get('saved', 0)} saved | {penalties.get('missed', 0)} missed",
+            color='white', fontsize=9, fontweight='bold', ha='center')
+
+    if not placements:
+        ax.text(0.5, 0.5, 'No penalty attempts recorded', color='white',
+                fontsize=12, fontweight='bold', ha='center', va='center', alpha=0.75)
+
+    ax.set_xlim(-0.08, 1.08)
+    ax.set_ylim(-0.16, 1.18)
+    ax.axis('off')
+    fig.tight_layout(pad=1.2)
     return _fig_to_b64(fig)
 
 
@@ -1690,40 +1943,36 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
             pref_desc = "They prioritize central build-up pathways through their deep playmakers and central defenders, seeking to penetrate lines directly through the middle."
             pref_color = _GOLD
 
-        left_col = dbc.Col(html.Div(className="goz-form-section", children=[
+        compact_card_style = {"padding": "16px", "marginBottom": "14px"}
+
+        left_col = dbc.Col(html.Div(className="goz-form-section", style=compact_card_style, children=[
             html.Div(className="goz-section-header", children=[
-                html.Span("1. WHERE DO BUILD-UPS START?", className="goz-card-title", style={"fontSize": "1.05rem"}),
+                html.Span("1. BUILD-UP START ZONES", className="goz-card-title", style={"fontSize": "0.95rem"}),
             ]),
             html.P(
                 f"Season view of {stats['buildup'].get('total_buildups', 0)} build-ups "
                 f"({stats['buildup'].get('avg_buildups_per_match', 0)} per match).",
-                style={"fontSize": "0.72rem", "color": "var(--text-secondary)", "marginBottom": "10px"}
+                style={"fontSize": "0.68rem", "color": "var(--text-secondary)", "marginBottom": "8px"}
             ),
-            html.Img(src=b_plot_b64, style={"width": "100%", "borderRadius": "10px", "marginBottom": "12px"}),
-            html.Div(style={"fontSize": "0.74rem", "color": "var(--text-secondary)", "lineHeight": "1.5"}, children=[
-                html.Span("Strategic Buildup View: ", style={"color": _GOLD, "fontWeight": "700"}),
-                f"They primarily initiate build-ups and attack through the ",
+            html.Img(src=b_plot_b64, style={
+                "width": "100%", "maxHeight": "360px", "objectFit": "contain",
+                "borderRadius": "10px", "marginBottom": "10px"
+            }),
+            html.Div(style={"fontSize": "0.7rem", "color": "var(--text-secondary)", "lineHeight": "1.45"}, children=[
+                html.Span("Primary lane: ", style={"color": _GOLD, "fontWeight": "700"}),
                 html.Span(f"{pref_side} ({pref_pct}%)", style={"color": pref_color, "fontWeight": "800", "fontSize": "0.82rem"}),
-                ". ",
-                html.Span(pref_desc, style={"fontStyle": "italic"}),
-                html.Br(), html.Br(),
-                html.Span("Strategic Density Grid: ", style={"color": _GOLD, "fontWeight": "700"}),
-                "This own-half pitch is shaded across 9 tactical zones to illustrate the precise distribution percentage of their buildup starting coordinates, highlighting primary initiation channels."
+                html.Span(f". {pref_desc}", style={"fontStyle": "italic"}),
             ])
-        ]), md=12)
+        ]), md=6)
         
         # Dynamic F3 entry and outcome breakdown with dropdown selector
         f3_breakdown = html.Div(style={
-            "marginTop": "16px", "padding": "16px", "borderRadius": "10px",
+            "marginTop": "14px", "padding": "16px", "borderRadius": "10px",
             "background": "rgba(255,255,255,0.02)", "border": "1px solid var(--border-color)"
         }, children=[
             html.Div(style={"marginBottom": "10px"}, children=[
                 html.Span("FINAL THIRD ENTRY & OUTCOMES", style={"fontSize": "0.78rem", "fontWeight": "800", "color": _GOLD, "letterSpacing": "0.5px"}),
             ]),
-            html.P(
-                "Analyze outcomes and pitch mapping for different final third entry methods.",
-                style={"fontSize": "0.68rem", "color": "var(--text-secondary)", "marginBottom": "12px"}),
-            
             html.Label("SELECT ENTRY FILTER TYPE", className="goz-label", style={"fontSize": "0.68rem", "fontWeight": "700", "color": _GOLD}),
             dcc.Dropdown(
                 id='pre-match-f3-entry-type-selector',
@@ -1755,30 +2004,28 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         else:
             rank_str = None
 
-        mid_col_enhanced = dbc.Col(html.Div(className="goz-form-section", children=[
+        mid_col_enhanced = dbc.Col(html.Div(className="goz-form-section", style=compact_card_style, children=[
             html.Div(className="goz-section-header", children=[
-                html.Span("2. AFTER 10 SECONDS — WHAT HAPPENED?", className="goz-card-title", style={"fontSize": "1.05rem"}),
+                html.Span("2. 10s BUILD-UP OUTCOMES", className="goz-card-title", style={"fontSize": "0.95rem"}),
             ]),
-            html.P("What happened within 10 seconds of starting build-up from own half?", style={"fontSize": "0.72rem", "color": "var(--text-secondary)", "marginBottom": "16px"}),
             make_progress_bar("Build-up-Derived Final Third Entry Rate", f3_pct, _GOLD, rank_str=rank_str),
             make_progress_bar("Shot Attempt Rate", shot_pct, _BLUE),
             make_progress_bar("Goal Conversion Rate", goal_pct, _GREEN),
             make_progress_bar("Possession Turnover Rate", turnover_pct, _RED),
             make_progress_bar("Conceded Danger after Turnover (10s)", opp_danger_pct, "#a855f7"),
-            html.Div(style={"marginTop": "16px", "padding": "10px", "borderRadius": "8px", "background": "rgba(255,255,255,0.02)", "border": "1px solid var(--border-color)", "fontSize": "0.7rem", "color": "var(--text-secondary)"}, children=[
+            html.Div(style={"marginTop": "10px", "padding": "9px", "borderRadius": "8px", "background": "rgba(255,255,255,0.02)", "border": "1px solid var(--border-color)", "fontSize": "0.68rem", "color": "var(--text-secondary)"}, children=[
                 html.Span("Vulnerability Warning: ", style={"color": _RED, "fontWeight": "700"}),
                 f"When losing the ball in buildup, they concede a Final Third entry or shot within 10 seconds in ",
                 html.Span(f"{opp_danger_pct}%", style={"color": "white", "fontWeight": "700"}), " of the sequences. High-press triggers should be initiated."
             ]),
-            html.Div(id='pre-match-buildup-rank-container', style={"marginTop": "16px"},
+            html.Div(id='pre-match-buildup-rank-container', style={"marginTop": "12px"},
                      children=_build_buildup_rank_section(opponent)),
             f3_breakdown,
-        ]), md=12)
+        ]), md=6)
 
-        goal_sequence_card = dbc.Col(html.Div(className="goz-form-section", children=[
-            html.Div(className="goz-section-header", style={"marginBottom": "20px"}, children=[
-                html.Span("3. FULL-SEASON GOAL ATTACKS", className="goz-card-title", style={"fontSize": "1.1rem"}),
-                html.P("Inspect every goal from the season and view the full uninterrupted attacking possession, from the first action to the finish.", className="goz-card-desc")
+        goal_sequence_card = dbc.Col(html.Div(className="goz-form-section", style=compact_card_style, children=[
+            html.Div(className="goz-section-header", style={"marginBottom": "14px"}, children=[
+                html.Span("3. GOAL ATTACKS", className="goz-card-title", style={"fontSize": "0.98rem"}),
             ]),
             dbc.Row([
                 dbc.Col([
@@ -1809,11 +2056,11 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
                             )
                         ], width=6)
                     ], style={"marginBottom": "15px"}),
-                    html.Div(id='pre-match-goal-list-container', style={"maxHeight": "550px", "overflowY": "auto"})
+                    html.Div(id='pre-match-goal-list-container', style={"maxHeight": "360px", "overflowY": "auto"})
                 ], md=4),
                 dbc.Col([
                     html.Div("COMPLETE GOAL ATTACK — FIRST ACTION TO FINISH", style={"fontSize": "0.68rem", "fontWeight": "800", "color": _GOLD, "marginBottom": "8px", "letterSpacing": "0.5px", "textAlign": "center"}),
-                    html.Div(id='pre-match-goal-sequence-graph-container', style={"minHeight": "450px"})
+                    html.Div(id='pre-match-goal-sequence-graph-container', style={"minHeight": "340px"})
                 ], md=8)
             ])
         ]), md=12)
@@ -1821,8 +2068,7 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         phase_bench = _build_phase_bench_section('offensive-tab', opponent, opp_name)
         return html.Div([
             phase_bench,
-            dbc.Row([left_col], style={"marginBottom": "20px"}),
-            dbc.Row([mid_col_enhanced], style={"marginBottom": "20px"}),
+            dbc.Row([left_col, mid_col_enhanced], className="g-3", style={"marginBottom": "14px"}),
             dbc.Row([goal_sequence_card])
         ])
 
@@ -2136,6 +2382,15 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         p_scored = pen.get('scored', 0)
         p_saved = pen.get('saved', 0)
         p_missed = pen.get('missed', 0)
+        p_takers = pen.get('takers', [])
+        p_placements = pen.get('placements', [])
+        p_conv = round(p_scored / max(p_total, 1) * 100, 1)
+        p_rank, p_rank_total = _penalty_total_rank(opponent)
+        p_rank_text = f"#{p_rank}/{p_rank_total}" if p_rank is not None else "loading"
+        penalty_rows = sorted(
+            p_placements,
+            key=lambda item: (item.get('week') or 0, item.get('minute') or 0, item.get('num') or 0)
+        )
         
         mid_col = dbc.Col(html.Div(className="goz-form-section", children=[
             html.Div(className="goz-section-header", children=[
@@ -2161,11 +2416,15 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
                 html.Div("PENALTIES HISTORY", style={"fontSize": "0.68rem", "fontWeight": "800", "color": _GOLD, "marginBottom": "10px", "letterSpacing": "0.5px"}),
                 html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "0.78rem", "marginBottom": "8px"}, children=[
                     html.Span("Total Penalty Kicks", style={"color": "var(--text-secondary)"}),
-                    html.Span(f"{p_total}", style={"fontWeight": "bold", "color": "white"})
+                    html.Span(f"{p_total} · rank {p_rank_text}", style={"fontWeight": "bold", "color": "white"})
                 ]),
                 html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "0.78rem", "marginBottom": "8px"}, children=[
                     html.Span("Penalties Scored", style={"color": "var(--text-secondary)"}),
                     html.Span(f"{p_scored}", style={"fontWeight": "bold", "color": _GREEN})
+                ]),
+                html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "0.78rem", "marginBottom": "8px"}, children=[
+                    html.Span("Conversion Rate", style={"color": "var(--text-secondary)"}),
+                    html.Span(f"{p_conv}%", style={"fontWeight": "bold", "color": _GOLD})
                 ]),
                 html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "0.78rem", "marginBottom": "8px"}, children=[
                     html.Span("Penalties Saved", style={"color": "var(--text-secondary)"}),
@@ -2174,7 +2433,53 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
                 html.Div(style={"display": "flex", "justifyContent": "space-between", "fontSize": "0.78rem", "marginBottom": "8px"}, children=[
                     html.Span("Penalties Missed / Off-Target", style={"color": "var(--text-secondary)"}),
                     html.Span(f"{p_missed}", style={"fontWeight": "bold", "color": _RED})
-                ])
+                ]),
+                html.Div("PENALTY TAKERS", style={
+                    "fontSize": "0.64rem", "fontWeight": "800", "color": _GOLD,
+                    "marginTop": "12px", "marginBottom": "8px", "letterSpacing": "0.5px"
+                }),
+                html.Div([
+                    html.Div(style={
+                        "display": "flex", "justifyContent": "space-between",
+                        "fontSize": "0.72rem", "marginBottom": "5px",
+                    }, children=[
+                        html.Span(name, style={"color": "white", "fontWeight": "700"}),
+                        html.Span(
+                            f"{data['scored']}/{data['total']}",
+                            style={"color": _GREEN if data['scored'] == data['total'] else _GOLD, "fontWeight": "700"}
+                        )
+                    ]) for name, data in p_takers[:4]
+                ] if p_takers else html.Div("No penalty takers recorded", style={
+                    "fontSize": "0.7rem", "color": "var(--text-secondary)"
+                })),
+                html.Div("SHOT PLACEMENT LOG", style={
+                    "fontSize": "0.64rem", "fontWeight": "800", "color": _GOLD,
+                    "marginTop": "12px", "marginBottom": "8px", "letterSpacing": "0.5px"
+                }),
+                html.Div([
+                    html.Div(style={
+                        "display": "grid",
+                        "gridTemplateColumns": "20px 1fr auto",
+                        "gap": "7px",
+                        "alignItems": "center",
+                        "fontSize": "0.68rem",
+                        "padding": "5px 0",
+                        "borderTop": "1px solid rgba(255,255,255,0.06)" if idx else "none",
+                    }, children=[
+                        html.Span(f"#{row.get('num')}", style={"color": _GOLD, "fontWeight": "800"}),
+                        html.Span(
+                            f"{row.get('player', 'Unknown')} vs {row.get('opponent', '?')} ({row.get('minute', 0)}')",
+                            style={"color": "white", "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap"}
+                        ),
+                        html.Span(
+                            f"{row.get('side', 'Unknown')} · {row.get('event', '')}",
+                            style={"color": _GREEN if row.get('event') == 'Goal' else _BLUE if row.get('event') == 'Saved Shot' else _RED,
+                                   "fontWeight": "700"}
+                        ),
+                    ]) for idx, row in enumerate(penalty_rows)
+                ] if penalty_rows else html.Div("No shot placement data", style={
+                    "fontSize": "0.7rem", "color": "var(--text-secondary)"
+                }))
             ])
         ]), md=4)
         
@@ -2184,7 +2489,6 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         gk_long = gk.get('long', 0)
         gk_short = gk.get('short', 0)
         gk_long_pct = gk.get('long_pct', 0)
-        overview_b64 = _build_setpiece_overview(pen, fk, gk)
         
         right_col = dbc.Col(html.Div(className="goz-form-section", children=[
             html.Div(className="goz-section-header", children=[
@@ -2214,9 +2518,9 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         ]), md=4)
         
         phase_bench_sp = _build_phase_bench_section('set-pieces-tab', opponent, opp_name)
+        penalty_goal_b64 = _build_penalty_goal_mouth(pen)
 
         # Season avg summary cards row (penalties + goalkicks quick-glance)
-        p_conv  = round(p_scored / max(p_total, 1) * 100, 1)
         fk_conv = round(fk_goals / max(fk_shots, 1) * 100, 1) if fk_shots > 0 else 0
 
         summary_cards = dbc.Row([
@@ -2224,7 +2528,7 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
                 html.Div("PENALTIES", className="coach-brief-label", style={"fontSize": "0.62rem", "marginBottom": "4px"}),
                 html.Div(f"{p_scored}/{p_total}", className="coach-brief-text",
                          style={"fontSize": "1.6rem", "fontWeight": "700", "color": _GOLD}),
-                html.Div(f"Conv. rate: {p_conv}%", style={"fontSize": "0.66rem", "color": "var(--text-secondary)"}),
+                html.Div(f"Total rank: {p_rank_text} · Conv. rate: {p_conv}%", style={"fontSize": "0.66rem", "color": "var(--text-secondary)"}),
             ]), md=3, sm=6),
             dbc.Col(html.Div(className="coach-brief-item", style={"minHeight": "auto", "padding": "14px 18px", "textAlign": "center"}, children=[
                 html.Div("DIRECT FK GOALS", className="coach-brief-label", style={"fontSize": "0.62rem", "marginBottom": "4px"}),
@@ -2246,20 +2550,28 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
             ]), md=3, sm=6),
         ], style={"marginBottom": "20px"})
 
+        penalty_goal_section = html.Div(className="goz-form-section", style={"marginBottom": "20px"}, children=[
+            html.Div(className="goz-section-header", children=[
+                html.Span("PENALTY GOAL MOUTH", className="goz-card-title", style={"fontSize": "1.05rem"}),
+            ]),
+            html.P(
+                "Penalty dots are plotted inside the goal using Opta goal-mouth coordinates. Numbers match the shot placement log.",
+                className="goz-card-desc",
+                style={"fontSize": "0.72rem", "marginBottom": "12px"},
+            ),
+            html.Img(src=penalty_goal_b64, style={
+                "width": "100%",
+                "maxWidth": "760px",
+                "display": "block",
+                "margin": "0 auto",
+                "borderRadius": "10px",
+            }),
+        ])
+
         return html.Div([
             phase_bench_sp,
             summary_cards,
-            html.Div(className="goz-form-section", children=[
-                html.Div(className="goz-section-header", children=[
-                    html.Span("SET-PIECE & RESTART VISUAL OVERVIEW", className="goz-card-title",
-                              style={"fontSize": "1.05rem"}),
-                ]),
-                html.P("Football-specific view of penalty placement, direct free-kick placement, and goal-kick landing (destination) locations.",
-                       style={"fontSize": "0.72rem", "color": "var(--text-secondary)", "marginBottom": "12px"}),
-                html.Img(src=overview_b64, style={"width": "100%", "maxWidth": "980px", "margin": "0 auto",
-                                                  "display": "block", "borderRadius": "10px",
-                                                  "border": "1px solid var(--border-color)"}),
-            ]),
+            penalty_goal_section,
             dbc.Row([left_col, mid_col, right_col]),
         ])
 
@@ -3856,8 +4168,8 @@ def _get_f3_entries_stats(team_name, only_buildup=False):
     return result
 
 
-def _build_f3_shots_pitch(shot_coords):
-    fig, ax = plt.subplots(figsize=(6.5, 4.5), facecolor=_PITCH_BG)
+def _build_f3_shots_pitch(shot_coords, title_prefix='FINAL-THIRD ENTRIES'):
+    fig, ax = plt.subplots(figsize=(8.2, 5.4), facecolor=_PITCH_BG)
     ax.set_facecolor(_PITCH_BG)
     
     # Draw attacking half-pitch outline (x from 50 to 100, y from 0 to 100)
@@ -3892,7 +4204,7 @@ def _build_f3_shots_pitch(shot_coords):
     # Add legend inside pitch
     ax.legend(loc='lower left', framealpha=0.9, facecolor='#111f12', edgecolor='none', fontsize=8, labelcolor='white')
     
-    ax.set_title(f'SHOTS ARISING FROM FINAL-THIRD ENTRIES ({len(shot_coords)} TOTAL)',
+    ax.set_title(f'{title_prefix} — SHOTS AFTER ENTRY ({len(shot_coords)} TOTAL)',
                  color='#fbbf24', fontsize=9.5, fontweight='bold', pad=8)
     return _fig_to_b64(fig)
 
@@ -3919,18 +4231,38 @@ def update_f3_breakdown(entry_type, opponent):
         
         children_list = []
         
-        # Generate the pitch visual containing only the filtered shots
-        pitch_b64 = _build_f3_shots_pitch(shot_coords)
-        
         if only_buildup:
-            desc_text = f"Outcomes and shots after own-half build-ups that reached the final third within 10 seconds. Total final third entries recorded: {total_entries}."
+            mode_label = "BUILD-UP FINAL THIRD ENTRIES"
+            mode_color = _GOLD
+            mode_hint = "Only possessions that started in own half and then entered the final third."
+            desc_text = f"Own-half build-ups that reached the final third within 10 seconds: {total_entries} entries."
         else:
-            desc_text = f"Outcomes and shots after all final third entries. Total final third entries recorded: {total_entries}."
+            mode_label = "ALL FINAL THIRD ENTRIES"
+            mode_color = _BLUE
+            mode_hint = "Every possession sequence entering the final third, including transitions and higher starts."
+            desc_text = f"All final third entries from open possession sequences: {total_entries} entries."
+
+        # Generate the pitch visual containing only the filtered shots
+        pitch_b64 = _build_f3_shots_pitch(shot_coords, title_prefix=mode_label)
             
         children_list.extend([
-            html.P(desc_text, style={"fontSize": "0.68rem", "color": "var(--text-secondary)", "marginBottom": "12px"}),
+            html.Div(style={
+                "display": "flex", "justifyContent": "space-between", "alignItems": "center",
+                "gap": "10px", "marginBottom": "10px", "flexWrap": "wrap",
+            }, children=[
+                html.Span(mode_label, style={
+                    "fontSize": "0.72rem", "fontWeight": "900", "color": mode_color,
+                    "letterSpacing": "0.5px", "padding": "5px 8px",
+                    "borderRadius": "999px", "background": f"{mode_color}22",
+                    "border": f"1px solid {mode_color}55",
+                }),
+                html.Span(desc_text, style={
+                    "fontSize": "0.72rem", "fontWeight": "700", "color": "white",
+                }),
+            ]),
+            html.P(mode_hint, style={"fontSize": "0.68rem", "color": "var(--text-secondary)", "marginBottom": "12px"}),
             html.Img(src=pitch_b64, style={
-                "width": "100%", "maxWidth": "720px", "margin": "0 auto 16px",
+                "width": "100%", "maxWidth": "860px", "margin": "0 auto 16px",
                 "display": "block", "borderRadius": "10px", "border": "1px solid var(--border-color)"
             })
         ])

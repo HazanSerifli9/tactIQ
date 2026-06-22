@@ -406,6 +406,8 @@ def plot_set_pieces(df, team_name, sp_type="corners"):
     
     # Track takers
     takers = {}
+    targets = {}
+    delivery_styles = {'Inswinger': 0, 'Outswinger': 0, 'Straight': 0, 'Other': 0}
     
     # We will process and normalize all deliveries
     deliveries = []
@@ -414,6 +416,20 @@ def plot_set_pieces(df, team_name, sp_type="corners"):
         # Get taker
         taker = row.get('player_name', 'Unknown')
         takers[taker] = takers.get(taker, 0) + 1
+
+        if sp_type == "corners":
+            if _is_truthy_flag(row.get('Inswinger')):
+                delivery_styles['Inswinger'] += 1
+            elif _is_truthy_flag(row.get('Outswinger')):
+                delivery_styles['Outswinger'] += 1
+            elif _is_truthy_flag(row.get('Straight')):
+                delivery_styles['Straight'] += 1
+            else:
+                delivery_styles['Other'] += 1
+
+            target = _infer_corner_target(df, row, team_name)
+            if target:
+                targets[target] = targets.get(target, 0) + 1
         
         raw_x = float(row['x'])
         raw_y = float(row['y'])
@@ -456,22 +472,42 @@ def plot_set_pieces(df, team_name, sp_type="corners"):
             'x0': x0, 'y0': y0, 'x1': x1, 'y1': y1,
             'is_success': is_success, 'taker': taker
         })
+
+    # Slightly separate near-identical deliveries so repeated corners do not
+    # collapse into one visible arrow.
+    overlap_groups = {}
+    for d in deliveries:
+        d['plot_x0'], d['plot_y0'] = d['x0'], d['y0']
+        d['plot_x1'], d['plot_y1'] = d['x1'], d['y1']
+        key = (
+            round(d['x0'] / 2), round(d['y0'] / 2),
+            round(d['x1'] / 2), round(d['y1'] / 2),
+        )
+        overlap_groups.setdefault(key, []).append(d)
+
+    for group in overlap_groups.values():
+        if len(group) <= 1:
+            continue
+        offsets = np.linspace(-(len(group) - 1) * 0.8, (len(group) - 1) * 0.8, len(group))
+        for d, offset in zip(group, offsets):
+            d['plot_y0'] = np.clip(d['y0'] + offset, 0, 80)
+            d['plot_y1'] = np.clip(d['y1'] + offset, 0, 80)
         
     # Draw deliveries
     for d in deliveries:
-        x0, y0, x1, y1 = d['x0'], d['y0'], d['x1'], d['y1']
+        x0, y0, x1, y1 = d['plot_x0'], d['plot_y0'], d['plot_x1'], d['plot_y1']
         is_success = d['is_success']
         
         color = TACTIQ_ACCENT if is_success else '#ef4444'
         alpha = 0.8 if is_success else 0.28
         lw = 2.0 if is_success else 1.0
         
-        pitch.arrows(d['x0'], d['y0'], d['x1'], d['y1'],
+        pitch.arrows(x0, y0, x1, y1,
                      color=color, alpha=alpha, lw=lw,
                      headwidth=3.5, headlength=4, headaxislength=3.5,
                      ax=ax_pitch, zorder=4)
                      
-        pitch.scatter(d['x1'], d['y1'], color=color, s=40, alpha=alpha + 0.1,
+        pitch.scatter(x1, y1, color=color, s=40, alpha=alpha + 0.1,
                       edgecolors=TACTIQ_BG, linewidths=0.5, ax=ax_pitch, zorder=5)
                       
     # Shading the key landing areas (6-Yard and Penalty Area) faintly
@@ -482,7 +518,12 @@ def plot_set_pieces(df, team_name, sp_type="corners"):
     rect_box = Rectangle((18, 102), 44, 18, facecolor='#ef4444', alpha=0.04, edgecolor='none', zorder=1)
     ax_pitch.add_patch(rect_box)
     
-    ax_pitch.set_title(f"{clean}  ·  {title_text} Delivery Map  ·  {total_kicks} total",
+    plotted_kicks = len(deliveries)
+    count_text = (
+        f"{plotted_kicks} plotted · {total_kicks} total"
+        if plotted_kicks != total_kicks else f"{total_kicks} total"
+    )
+    ax_pitch.set_title(f"{clean}  ·  {title_text} Delivery Map  ·  {count_text}",
                        color=TACTIQ_FG, fontsize=12, fontweight='bold', pad=12)
                        
     # ── Sidebar Panel ─────────────────────────────────────────
@@ -494,6 +535,9 @@ def plot_set_pieces(df, team_name, sp_type="corners"):
     # Title
     ax_side.text(0.5, 0.94, title_text.upper(), fontsize=14, fontweight='bold', color=TACTIQ_ACCENT, ha='center')
     ax_side.plot([0.15, 0.85], [0.91, 0.91], color='#444', linewidth=1.0)
+    if plotted_kicks != total_kicks:
+        ax_side.text(0.5, 0.885, f"{total_kicks - plotted_kicks} corner missing landing coordinates",
+                     fontsize=8, color='#888', ha='center')
     
     # KPI 1: Completion
     comp_pct = round(successful_kicks / total_kicks * 100) if total_kicks else 0
@@ -510,18 +554,157 @@ def plot_set_pieces(df, team_name, sp_type="corners"):
     ax_side.text(0.5, 0.49, f"{six_pct}%", fontsize=24, fontweight='bold', color='white', ha='center')
     ax_side.text(0.5, 0.45, "Deliveries into 6-Yard Box", fontsize=9, color='#888', ha='center')
     
-    # Top Takers List
-    ax_side.text(0.5, 0.32, "PRIMARY TAKERS", fontsize=9, color='#777', fontweight='bold', ha='center')
-    ax_side.plot([0.3, 0.7], [0.30, 0.30], color='#333', linewidth=0.5)
-    
-    sorted_takers = sorted(takers.items(), key=lambda x: x[1], reverse=True)[:3]
-    y_start = 0.24
-    for name, cnt in sorted_takers:
-        s_name = get_short_name(name)
-        ax_side.text(0.2, y_start, s_name, fontsize=10, color='#eee', ha='left')
-        ax_side.text(0.8, y_start, f"{cnt} kicks", fontsize=10, color=TACTIQ_ACCENT, ha='right', fontweight='bold')
-        y_start -= 0.05
+    if sp_type == "corners":
+        ax_side.text(0.5, 0.35, "PRIMARY TAKERS", fontsize=9, color='#777', fontweight='bold', ha='center')
+        ax_side.plot([0.3, 0.7], [0.335, 0.335], color='#333', linewidth=0.5)
+        sorted_takers = sorted(takers.items(), key=lambda x: x[1], reverse=True)[:2]
+        y_taker = 0.30
+        for name, cnt in sorted_takers:
+            ax_side.text(0.16, y_taker, get_short_name(name), fontsize=8.5, color='#eee', ha='left')
+            ax_side.text(0.84, y_taker, f"{cnt}", fontsize=8.5, color=TACTIQ_ACCENT, ha='right', fontweight='bold')
+            y_taker -= 0.035
+
+        ax_side.text(0.5, 0.22, "DELIVERY TYPE", fontsize=9, color='#777', fontweight='bold', ha='center')
+        ax_side.plot([0.3, 0.7], [0.205, 0.205], color='#333', linewidth=0.5)
+        y_style = 0.17
+        for label, color in [('Inswinger', '#22c55e'), ('Outswinger', '#f97316'), ('Straight', '#60a5fa')]:
+            cnt = delivery_styles.get(label, 0)
+            ax_side.text(0.18, y_style, label, fontsize=8.5, color='#eee', ha='left')
+            ax_side.text(0.84, y_style, f"{cnt}", fontsize=8.5, color=color, ha='right', fontweight='bold')
+            y_style -= 0.032
+
+        ax_side.text(0.5, 0.07, "LIKELY TARGETS", fontsize=9, color='#777', fontweight='bold', ha='center')
+        ax_side.plot([0.3, 0.7], [0.055, 0.055], color='#333', linewidth=0.5)
+        sorted_targets = sorted(targets.items(), key=lambda x: x[1], reverse=True)[:2]
+        if sorted_targets:
+            y_start = 0.025
+            for name, cnt in sorted_targets:
+                ax_side.text(0.16, y_start, get_short_name(name), fontsize=8.2, color='#eee', ha='left')
+                ax_side.text(0.84, y_start, f"{cnt}", fontsize=8.2, color=TACTIQ_ACCENT, ha='right', fontweight='bold')
+                y_start -= 0.03
+        else:
+            ax_side.text(0.5, 0.025, "No clear target", fontsize=8.2, color='#888', ha='center')
+    else:
+        # Top Takers List
+        ax_side.text(0.5, 0.32, "PRIMARY TAKERS", fontsize=9, color='#777', fontweight='bold', ha='center')
+        ax_side.plot([0.3, 0.7], [0.30, 0.30], color='#333', linewidth=0.5)
         
+        sorted_takers = sorted(takers.items(), key=lambda x: x[1], reverse=True)[:3]
+        y_start = 0.24
+        for name, cnt in sorted_takers:
+            s_name = get_short_name(name)
+            ax_side.text(0.2, y_start, s_name, fontsize=10, color='#eee', ha='left')
+            ax_side.text(0.8, y_start, f"{cnt} kicks", fontsize=10, color=TACTIQ_ACCENT, ha='right', fontweight='bold')
+            y_start -= 0.05
+        
+    return fig_to_base64(fig)
+
+
+def plot_penalties(df, team_name):
+    """Penalty attempts map and result list for a single team."""
+    from mplsoccer import VerticalPitch
+    from matplotlib import gridspec
+
+    sp_data = analysis.get_set_pieces(df, team_name)
+    data = sp_data.get("penalties", pd.DataFrame()).copy()
+
+    clean = (team_name.replace(' Kulübü','').replace(' Spor','')
+                      .replace(' Futbol','').strip())
+
+    fig = plt.figure(figsize=(16, 7.5))
+    fig.patch.set_facecolor(TACTIQ_BG)
+    gs = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[2.4, 1.1], wspace=0.05)
+    ax_pitch = fig.add_subplot(gs[0])
+    ax_side  = fig.add_subplot(gs[1])
+
+    pitch = VerticalPitch(pitch_type='statsbomb', pitch_color=TACTIQ_BG,
+                          line_color='#555', linewidth=1.2, corner_arcs=True,
+                          half=True)
+    pitch.draw(ax=ax_pitch)
+
+    ax_side.set_facecolor(TACTIQ_BG)
+    ax_side.set_xlim(0, 1)
+    ax_side.set_ylim(0, 1)
+    ax_side.axis('off')
+
+    if data.empty:
+        ax_pitch.text(40, 90, "No Penalties Data Recorded", color='#777',
+                      fontsize=12, fontweight='bold', ha='center', va='center')
+        ax_side.text(0.5, 0.94, "PENALTIES", fontsize=14, fontweight='bold',
+                     color=TACTIQ_ACCENT, ha='center')
+        ax_side.text(0.5, 0.78, "0", fontsize=34, fontweight='900',
+                     color='white', ha='center')
+        ax_side.text(0.5, 0.72, "penalty attempts", fontsize=9, color='#888', ha='center')
+        return fig_to_base64(fig)
+
+    attempts = []
+    for i, (_, row) in enumerate(data.iterrows()):
+        raw_x = pd.to_numeric(row.get('x'), errors='coerce')
+        raw_y = pd.to_numeric(row.get('y'), errors='coerce')
+        if pd.isna(raw_x) or raw_x <= 0:
+            raw_x = 88.5
+        if pd.isna(raw_y) or raw_y <= 0:
+            raw_y = 50.0
+
+        flip = raw_x < 50
+        x = (100 - raw_x) * 1.2 if flip else raw_x * 1.2
+        y = (100 - raw_y) * 0.8 if flip else raw_y * 0.8
+        x = np.clip(x, 0, 120)
+        y = np.clip(y + (i - (len(data) - 1) / 2) * 1.8, 0, 80)
+
+        event = str(row.get('event', 'Penalty'))
+        if event == 'Goal' or _is_truthy_flag(row.get('Scored')):
+            result, color, marker = "Goal", '#22c55e', '*'
+        elif event == 'Saved Shot' or _is_truthy_flag(row.get('Saved')):
+            result, color, marker = "Saved", '#f97316', 'o'
+        elif event in ['Miss', 'Post'] or _is_truthy_flag(row.get('Missed')):
+            result, color, marker = "Missed", '#ef4444', 'x'
+        else:
+            result, color, marker = event, 'white', 'o'
+
+        attempts.append({
+            'player': row.get('player_name', 'Unknown'),
+            'minute': 0 if pd.isna(pd.to_numeric(row.get('time_min', 0), errors='coerce')) else int(pd.to_numeric(row.get('time_min', 0), errors='coerce')),
+            'result': result,
+            'color': color,
+            'x': x,
+            'y': y,
+            'marker': marker,
+        })
+
+    for attempt in attempts:
+        pitch.scatter(attempt['x'], attempt['y'], color=attempt['color'],
+                      s=180 if attempt['result'] == 'Goal' else 95,
+                      marker=attempt['marker'], alpha=0.9,
+                      edgecolors='white', linewidths=0.8,
+                      ax=ax_pitch, zorder=5)
+        ax_pitch.text(attempt['y'], attempt['x'] - 4, f"{attempt['minute']}'",
+                      color='white', fontsize=8, ha='center', va='center',
+                      fontweight='bold', zorder=6)
+
+    ax_pitch.set_title(f"{clean}  ·  Penalties  ·  {len(attempts)} total",
+                       color=TACTIQ_FG, fontsize=12, fontweight='bold', pad=12)
+
+    goals = sum(1 for a in attempts if a['result'] == 'Goal')
+    ax_side.text(0.5, 0.94, "PENALTIES", fontsize=14, fontweight='bold',
+                 color=TACTIQ_ACCENT, ha='center')
+    ax_side.plot([0.15, 0.85], [0.91, 0.91], color='#444', linewidth=1.0)
+    ax_side.text(0.5, 0.80, f"{goals}/{len(attempts)}", fontsize=34, fontweight='900',
+                 color='#22c55e' if goals == len(attempts) else '#fbbf24', ha='center')
+    ax_side.text(0.5, 0.75, "penalties scored", fontsize=9, color='#888', ha='center')
+
+    ax_side.text(0.5, 0.62, "ATTEMPTS", fontsize=9, color='#777', fontweight='bold', ha='center')
+    ax_side.plot([0.3, 0.7], [0.60, 0.60], color='#333', linewidth=0.5)
+    y_start = 0.53
+    for attempt in attempts[:6]:
+        ax_side.text(0.16, y_start, f"{attempt['minute']}' {get_short_name(attempt['player'])}",
+                     fontsize=9.5, color='#eee', ha='left')
+        ax_side.text(0.84, y_start, attempt['result'], fontsize=9.5,
+                     color=attempt['color'], ha='right', fontweight='bold')
+        y_start -= 0.06
+
+    ax_side.text(0.5, 0.08, "Markers show penalty attempt location", fontsize=8,
+                 color='#888', ha='center')
     return fig_to_base64(fig)
 
 # --- Advanced Analysis Code Integration ---
@@ -886,10 +1069,12 @@ def plot_defensive_profile(df, team_name):
         count=('x_scaled', 'count')
     ).reset_index()
 
-    # --- Block Metrics ---
-    avg_line = avg_locs['x'].mean()                                    # StatsBomb 0-120
+    # --- Engagement Metrics ---
+    # Keep the displayed AVG on the same action-level basis as the 1H/2H lines.
+    # Using player medians here can produce an AVG outside both half medians.
+    avg_line = defensive_df['x_scaled'].median()                       # StatsBomb 0-120
 
-    # Compactness: exclude GK (lowest x position) for realistic spread
+    # Action spread: exclude GK (lowest x position) for realistic outfield spread.
     outfield_locs = avg_locs.nlargest(len(avg_locs) - 1, 'x') if len(avg_locs) > 1 else avg_locs
     vertical_compact = outfield_locs['x'].max() - outfield_locs['x'].min()
     horizontal_compact = outfield_locs['y'].max() - outfield_locs['y'].min()
@@ -899,15 +1084,14 @@ def plot_defensive_profile(df, team_name):
     horiz_meters = horizontal_compact * (68 / 80)
     line_meters  = avg_line * (105 / 120)
 
-    # Block classification using real pitch meters (0 to 105m)
-    # Calibrated to account for goalkeeper's downward skew on team averages:
-    # High Block: > 43m, Mid Block: 34m - 43m, Low Block: <= 34m
+    # Engagement classification using real pitch meters (0 to 105m).
+    # This is event-data engagement height, not a tracking-data back-line height.
     if line_meters > 43.0:
-        block_type, block_color = "HIGH BLOCK", "#ef4444"
+        block_type, block_color = "HIGH ENGAGEMENT", "#ef4444"
     elif line_meters > 34.0:
-        block_type, block_color = "MID BLOCK", "#fbbf24"
+        block_type, block_color = "MID ENGAGEMENT", "#fbbf24"
     else:
-        block_type, block_color = "LOW BLOCK", "#3b82f6"
+        block_type, block_color = "LOW ENGAGEMENT", "#3b82f6"
 
     # --- 1H vs 2H split ---
     if 'expanded_minute' in defensive_df.columns:
@@ -949,7 +1133,7 @@ def plot_defensive_profile(df, team_name):
     # Grid: pitch (65%) + info panel (35%)
     gs = fig.add_gridspec(1, 2, width_ratios=[2.2, 1], wspace=0.04)
 
-    # ---------- LEFT: Defensive Block Pitch ----------
+    # ---------- LEFT: Defensive Action Pitch ----------
     ax_pitch = fig.add_subplot(gs[0])
     pitch = Pitch(pitch_type='statsbomb', pitch_color=TACTIQ_BG,
                   line_color=TACTIQ_FG, linewidth=2, line_zorder=2, corner_arcs=True)
@@ -1002,37 +1186,37 @@ def plot_defensive_profile(df, team_name):
                  bbox=dict(boxstyle='round,pad=0.6', facecolor=TACTIQ_BG,
                            edgecolor=block_color, linewidth=3))
 
-    # -- Compactness section --
-    ax_info.text(0.5, 0.83, "C O M P A C T N E S S", fontsize=9,
+    # -- Action spread section --
+    ax_info.text(0.5, 0.83, "A C T I O N   S P R E A D", fontsize=9,
                  color='#777', ha='center', fontweight='bold')
 
     ax_info.plot([0.15, 0.85], [0.815, 0.815], color='#444', linewidth=0.5)
 
     ax_info.text(0.5, 0.77, f"↕  {vert_meters:.1f}m", fontsize=18,
                  color='white', ha='center', fontweight='bold')
-    ax_info.text(0.5, 0.75, "vertical spread (GK → highest)", fontsize=8,
+    ax_info.text(0.5, 0.75, "vertical defensive-action spread", fontsize=8,
                  color='#888', ha='center')
 
     ax_info.text(0.5, 0.69, f"↔  {horiz_meters:.1f}m", fontsize=18,
                  color='white', ha='center', fontweight='bold')
-    ax_info.text(0.5, 0.67, "horizontal spread (L → R)", fontsize=8,
+    ax_info.text(0.5, 0.67, "horizontal defensive-action spread", fontsize=8,
                  color='#888', ha='center')
 
-    # Compactness rating
-    # Smaller spread = more compact. Typical compact block: vert < 30m, horiz < 35m
+    # Action-spread rating. Smaller spread means the team's defensive actions
+    # were concentrated in a tighter area; this is not tracking-data compactness.
     compact_score = max(0, min(100, 100 - ((vert_meters + horiz_meters) / 2 - 15) * 2))
     if compact_score >= 70:
-        compact_label, compact_clr = "Compact", "#22c55e"
+        compact_label, compact_clr = "Tight Spread", "#22c55e"
     elif compact_score >= 40:
-        compact_label, compact_clr = "Moderate", "#fbbf24"
+        compact_label, compact_clr = "Moderate Spread", "#fbbf24"
     else:
-        compact_label, compact_clr = "Stretched", "#ef4444"
+        compact_label, compact_clr = "Wide Spread", "#ef4444"
 
     ax_info.text(0.5, 0.61, compact_label, fontsize=14,
                  color=compact_clr, ha='center', fontweight='bold')
 
-    # -- Line Height by Half section --
-    ax_info.text(0.5, 0.52, "L I N E   H E I G H T", fontsize=9,
+    # -- Engagement height by half section --
+    ax_info.text(0.5, 0.52, "E N G A G E M E N T   H E I G H T", fontsize=9,
                  color='#777', ha='center', fontweight='bold')
     ax_info.plot([0.15, 0.85], [0.505, 0.505], color='#444', linewidth=0.5)
 
@@ -1050,7 +1234,7 @@ def plot_defensive_profile(df, team_name):
     diff_m = h2_meters - h1_meters
     if abs(diff_m) > 0.5:
         arrow = "▲" if diff_m > 0 else "▼"
-        shift_text = f"{arrow} {abs(diff_m):.1f}m {'pushed up' if diff_m > 0 else 'dropped back'}"
+        shift_text = f"{arrow} {abs(diff_m):.1f}m {'engaged higher' if diff_m > 0 else 'engaged deeper'}"
         shift_clr = '#22c55e' if diff_m > 0 else '#ef4444'
     else:
         shift_text = "≈ Stable"
@@ -3684,6 +3868,61 @@ def plot_phase_radar(phases_data_home, phases_data_away, home_team, away_team):
 
 from collections import Counter
 
+def _is_truthy_flag(value):
+    return str(value).lower().strip() in ['1', 'true', 'yes', 'si', 'y']
+
+
+def _event_seconds(row):
+    minute = pd.to_numeric(row.get('time_min', 0), errors='coerce')
+    second = pd.to_numeric(row.get('time_sec', 0), errors='coerce')
+    minute = 0 if pd.isna(minute) else minute
+    second = 0 if pd.isna(second) else second
+    return float(minute) * 60 + float(second)
+
+
+def _infer_corner_target(match_df, corner_row, team_name, max_seconds=12):
+    """
+    Event-data estimate of the player targeted by a corner.
+    Opta corners in this feed usually have a landing coordinate, but not a
+    direct recipient. We use the next same-team action near that landing point.
+    """
+    required = {'period_id', 'time_min', 'time_sec', 'team_name', 'player_name'}
+    if not required.issubset(match_df.columns):
+        return None
+
+    end_x = pd.to_numeric(corner_row.get('Pass End X'), errors='coerce')
+    end_y = pd.to_numeric(corner_row.get('Pass End Y'), errors='coerce')
+    if pd.isna(end_x) or pd.isna(end_y):
+        return None
+
+    period = corner_row.get('period_id')
+    start_s = _event_seconds(corner_row)
+    after = match_df[
+        (match_df['team_name'] == team_name) &
+        (match_df['period_id'] == period)
+    ].copy()
+    after['_seconds'] = after.apply(_event_seconds, axis=1)
+    after = after[(after['_seconds'] > start_s) & (after['_seconds'] <= start_s + max_seconds)]
+
+    if 'event_id' in after.columns and pd.notna(corner_row.get('event_id')):
+        after = after[after['event_id'] != corner_row.get('event_id')]
+
+    preferred_events = ['Goal', 'Miss', 'Saved Shot', 'Post', 'Aerial', 'Ball touch']
+    preferred = after[after['event'].isin(preferred_events)] if 'event' in after.columns else after.iloc[:0]
+    candidates = preferred if not preferred.empty else after
+    candidates = candidates.dropna(subset=['player_name', 'x', 'y'])
+    if candidates.empty:
+        return None
+
+    candidates['_dist'] = np.hypot(
+        pd.to_numeric(candidates['x'], errors='coerce') - end_x,
+        pd.to_numeric(candidates['y'], errors='coerce') - end_y,
+    )
+    candidates['_score'] = candidates['_dist'] + (candidates['_seconds'] - start_s) * 0.25
+    target = candidates.sort_values('_score').iloc[0]
+    return target.get('player_name')
+
+
 def identify_zone(x, y, x_bins=6, y_bins=3):
     """
     Assigns a zone ID based on x,y coordinates (Opta 100x100 scale).
@@ -4105,14 +4344,22 @@ def plot_goal_kicks_distribution(df, team_name):
     # Filter for the specific team
     df_team = df[df['team_name'] == team_name].copy()
     
-    # Filter for Goal Kicks
-    is_gk = (df_team['event'].astype(str).str.contains('Goal Kick', case=False, na=False))
-    is_gk = is_gk | (
-        (df_team['event'] == 'Pass') & 
-        (df_team['x_scaled'] < 7.2) & 
-        (df_team['y_scaled'].between(24, 56))
-    )
+    # Filter for Goal Kicks. Prefer the explicit Opta qualifier; only use the
+    # coordinate fallback when the qualifier is unavailable.
+    if 'Goal Kick' in df_team.columns:
+        is_gk = (
+            (df_team['event'] == 'Pass') &
+            df_team['Goal Kick'].apply(_is_truthy_flag)
+        )
+    else:
+        is_gk = (df_team['event'].astype(str).str.contains('Goal Kick', case=False, na=False))
+        is_gk = is_gk | (
+            (df_team['event'] == 'Pass') &
+            (df_team['x_scaled'] < 7.2) &
+            (df_team['y_scaled'].between(24, 56))
+        )
     t_gk = df_team[is_gk].copy()
+    t_gk = t_gk.dropna(subset=['Pass End X', 'Pass End Y'])
     total_gk = len(t_gk)
     
     fig, ax = plt.subplots(figsize=(6.5, 8))
@@ -4123,7 +4370,7 @@ def plot_goal_kicks_distribution(df, team_name):
     pitch.draw(ax=ax)
     
     # Crop to defensive half (goalkeeper on the left x=0, halfway line on the right x=60)
-    ax.set_xlim(-2, 62)
+    ax.set_xlim(-2, 70)
     ax.set_ylim(82, -2)  # Inverted Y-axis to match StatsBomb coordinate standard
     
     clean = (team_name.replace(' Kulübü','').replace(' Spor','')
@@ -4186,7 +4433,7 @@ def plot_goal_kicks_distribution(df, team_name):
     
     # Overlay Percentage Text Labels
     path_eff = [path_effects.Stroke(linewidth=2, foreground=TACTIQ_BG), path_effects.Normal()]
-    
+
     # Penalty box label
     ax.text(9, 40, f"INSIDE BOX\n{box_pct}%", color='white', fontsize=9.0, fontweight='900', ha='center', va='center', zorder=5, path_effects=path_eff)
     
@@ -4196,13 +4443,13 @@ def plot_goal_kicks_distribution(df, team_name):
     # Long label
     ax.text(50, 40, f"LONG\n{long_pct}%", color='white', fontsize=9.0, fontweight='900', ha='center', va='center', zorder=5, path_effects=path_eff)
     
-    # Horizontal side channels percentages at the right edge of the pitch frame (x=61.5) to prevent overlaps
+    # Horizontal side channel percentages in the right margin.
     # LEFT channel (y > 53.33) is physically at the top (near y = 13.33)
     # RIGHT channel (y < 26.67) is physically at the bottom (near y = 66.67)
     # CENTER channel is in the middle (y = 40.0)
-    ax.text(61.5, 13.33, f"LEFT: {left_pct}%", color='#fbbf24', fontsize=9.0, fontweight='900', ha='left', va='center', zorder=5, path_effects=path_eff, bbox=dict(facecolor=TACTIQ_BG, alpha=0.75, edgecolor='none', boxstyle='round,pad=0.25'))
-    ax.text(61.5, 40.0, f"CENTER: {center_pct}%", color='#fbbf24', fontsize=9.0, fontweight='900', ha='left', va='center', zorder=5, path_effects=path_eff, bbox=dict(facecolor=TACTIQ_BG, alpha=0.75, edgecolor='none', boxstyle='round,pad=0.25'))
-    ax.text(61.5, 66.67, f"RIGHT: {right_pct}%", color='#fbbf24', fontsize=9.0, fontweight='900', ha='left', va='center', zorder=5, path_effects=path_eff, bbox=dict(facecolor=TACTIQ_BG, alpha=0.75, edgecolor='none', boxstyle='round,pad=0.25'))
+    ax.text(63.0, 13.33, f"LEFT: {left_pct}%", color='#fbbf24', fontsize=8.2, fontweight='900', ha='left', va='center', zorder=5, path_effects=path_eff, bbox=dict(facecolor=TACTIQ_BG, alpha=0.75, edgecolor='none', boxstyle='round,pad=0.25'))
+    ax.text(63.0, 40.0, f"CENTER: {center_pct}%", color='#fbbf24', fontsize=8.2, fontweight='900', ha='left', va='center', zorder=5, path_effects=path_eff, bbox=dict(facecolor=TACTIQ_BG, alpha=0.75, edgecolor='none', boxstyle='round,pad=0.25'))
+    ax.text(63.0, 66.67, f"RIGHT: {right_pct}%", color='#fbbf24', fontsize=8.2, fontweight='900', ha='left', va='center', zorder=5, path_effects=path_eff, bbox=dict(facecolor=TACTIQ_BG, alpha=0.75, edgecolor='none', boxstyle='round,pad=0.25'))
     
     # Info footer (centered below the pitch x=30, y=83)
     ax.text(30, 83, f"Total Goal Kicks: {total_gk}  |  Shading represents zone density", color='#888', fontsize=8.5, ha='center', va='top', zorder=5)

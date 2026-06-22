@@ -23,75 +23,65 @@ RIVALS = {
     'Beşiktaş':    'Beşiktaş Jimnastik Kulübü',
     'Trabzonspor': 'Trabzonspor Kulübü',
     'Başakşehir':  'İstanbul Başakşehir Futbol Kulübü',
+    'Karagümrük':  'Fatih Karagümrük Spor Kulübü',
 }
 
-# Exact 5 matches per rival (hardcoded by user selection)
+# Exact 6 matches per rival: 2 wins, 2 draws, 2 losses.
 RIVAL_FILES = {
     'Galatasaray Spor Kulübü': [
-        'gs-alanya.parquet',
-        'fb-gs.parquet',
-        'konya-gs.parquet',
-        'gs-genclerbirligi.parquet',
-        'ts-gs.parquet',
+        'gs-antalyaspor.parquet',
+        'gençlerbirliği-gs.parquet',
+        'gs-kocaeli.parquet',
+        'gs-gaziantep.parquet',
+        'kasımpaşa-gs.parquet',
+        'samsun-gs.parquet',
     ],
     'Fenerbahçe Spor Kulübü': [
-        'kasimpasa-fb.parquet',
-        'fb-fatih.parquet',
-        'bjk-fb.parquet',
-        'eyup-fb.parquet',
-        'antalya-fb.parquet',
+        'konya-fb.parquet',
+        'kayseri-fb.parquet',
+        'fb-eyup.parquet',
+        'fb-rize.parquet',
+        'gs-fb.parquet',
+        'fatih-fb.parquet',
     ],
     'Beşiktaş Jimnastik Kulübü': [
-        'kayseri-bjk.parquet',
-        'bjk-genclerbirligi.parquet',
-        'bjk-samsunspor.parquet',
-        'ts-bjk.parquet',
-        'basaksehir-bjk.parquet',
+        'gaziantep-bjk.parquet',
+        'bjk-antalya.parquet',
+        'rize-bjk.parquet',
+        'bjk-alanyaspor.parquet',
+        'fb-bjk.parquet',
+        'samsun-bjk.parquet',
     ],
     'Trabzonspor Kulübü': [
+        'bjk-ts.parquet',
+        'ts-gs.parquet',
+        'alanya-ts.parquet',
         'kayseri-ts.parquet',
-        'rize-ts.parquet',
-        'ts-fb.parquet',
-        'basaksehir-ts.parquet',
-        'genclerbirligi-ts.parquet',
+        'ts-gençlerbirliği.parquet',
+        'konya-ts.parquet',
     ],
     'İstanbul Başakşehir Futbol Kulübü': [
-        'konya-basaksehir.parquet',
-        'antalya-basaksehir.parquet',
-        'rize-basaksehir.parquet',
+        'gaziantep-başakşehir.parquet',
+        'başakşehir-samsun.parquet',
+        'ts-başakşehir.parquet',
+        'kocaeli-başakşehir.parquet',
+        'fb-başakşehir.parquet',
         'gs-basaksehir.parquet',
-        'basaksehir-eyup.parquet',
+    ],
+    'Fatih Karagümrük Spor Kulübü': [
+        'fatih-alanya.parquet',
+        'kocaeli-fatih.parquet',
+        'bjk-fatih.parquet',
+        'gaziantep-fatih.parquet',
+        'konya-fatih.parquet',
+        'kayseri-fatih.parquet',
     ],
 }
 
 
 def _discover_rivals():
-    """Build rival options from the parquet data, keeping the famous-five labels first."""
-    discovered = {}
-    data_dir = get_data_dir()
-    try:
-        filenames = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
-    except Exception:
-        filenames = []
-
-    for filename in filenames:
-        try:
-            df = pd.read_parquet(os.path.join(data_dir, filename), columns=['team_name'])
-        except Exception:
-            try:
-                df = pd.read_parquet(os.path.join(data_dir, filename))
-            except Exception:
-                continue
-        if 'team_name' not in df.columns:
-            continue
-        for team in df['team_name'].dropna().unique():
-            if team != GOZTEPE:
-                discovered[_short(team)] = team
-
-    ordered = dict(RIVALS)
-    for label in sorted(discovered):
-        ordered.setdefault(label, discovered[label])
-    return ordered
+    """Return the fixed rival scout team list requested for this view."""
+    return dict(RIVALS)
 
 _SUFFIXES = [
     'Spor Kulübü', 'Futbol Kulübü', 'Jimnastik Kulübü', 'Kulübü',
@@ -113,8 +103,15 @@ PURPLE   = "#a855f7"
 GREEN    = "#22c55e"
 ORANGE   = "#f97316"
 
+GOAL_MOUTH_Y_COL = 'Goal Mouth Y Coordinate'
+GOAL_MOUTH_Z_COL = 'Goal Mouth Z Coordinate'
+GOAL_MOUTH_LEFT_OPT = 45.2
+GOAL_MOUTH_RIGHT_OPT = 54.8
+
 SHOT_EVENTS = {'Goal', 'Miss', 'Saved Shot', 'Post'}
 DEF_EVENTS  = {'Tackle', 'Challenge', 'Interception', 'Clearance', 'Ball recovery'}
+RECOVERY_EVENTS = {'Ball recovery', 'Ball Recovery', 'Interception', 'Tackle'}
+LOSS_EVENTS = {'Dispossessed', 'Error', 'Blocked Pass'}
 SKIP_EVENTS = {
     'Team setp up', 'Start', 'End', 'Start delay', 'End delay',
     'Injury Time Announcement', 'Card', 'Player Off', 'Player on',
@@ -171,7 +168,8 @@ def _load_rival_matches(team_name: str) -> list:
         date = str(df['local_date'].iloc[0]) if 'local_date' in df.columns and not df.empty else ''
         return (week, date)
 
-    matches = sorted(matches, key=sort_key, reverse=True)[:5]
+    match_limit = 6 if team_name in RIVAL_FILES else 5
+    matches = sorted(matches, key=sort_key, reverse=True)[:match_limit]
 
     _MATCH_CACHE[team_name] = matches
     return matches
@@ -219,369 +217,382 @@ def _zone_x(x: float) -> str:
 def _safe_pct(num, denom) -> float:
     return round(num / max(denom, 1) * 100, 1)
 
+def _safe_float(value):
+    try:
+        result = float(value)
+        return result if np.isfinite(result) else None
+    except (TypeError, ValueError):
+        return None
+
+def _event_seconds(row) -> float:
+    return float(row.get('time_min') or 0) * 60 + float(row.get('time_sec') or 0)
+
+def _is_yes(value) -> bool:
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {'si', 'yes', 'true', '1'}
+
+def _has_qualifier(row, columns) -> bool:
+    for col in columns:
+        if col in row and _is_yes(row.get(col)):
+            return True
+    return False
+
+def _truthy_series(series: pd.Series) -> pd.Series:
+    return series.astype(str).str.strip().str.lower().isin({'si', 'yes', 'true', '1', 'y'})
+
+def _corner_taken_mask(df: pd.DataFrame) -> pd.Series:
+    mask = pd.Series(False, index=df.index)
+    taken_cols = [
+        col for col in df.columns
+        if isinstance(col, str) and 'corner' in col.lower() and 'taken' in col.lower()
+    ]
+    for col in taken_cols:
+        mask |= _truthy_series(df[col])
+
+    if not taken_cols and 'event' in df.columns:
+        event_l = df['event'].astype(str).str.strip().str.lower()
+        mask |= event_l.isin({'corner', 'corner taken', 'corner kick'})
+
+    if not taken_cols and not mask.any() and 'type_id' in df.columns:
+        mask |= pd.to_numeric(df['type_id'], errors='coerce').eq(6)
+
+    return mask
+
+def _corner_events(df: pd.DataFrame) -> pd.DataFrame:
+    corners = df[_corner_taken_mask(df)].copy()
+    if corners.empty:
+        return corners
+
+    subset = [
+        col for col in ['team_name', 'period_id', 'time_min', 'time_sec', 'player_name', 'x', 'y']
+        if col in corners.columns
+    ]
+    if subset:
+        corners = corners.drop_duplicates(subset=subset)
+    return corners
+
+def _free_kick_taken_mask(df: pd.DataFrame) -> pd.Series:
+    mask = pd.Series(False, index=df.index)
+    taken_cols = [
+        col for col in df.columns
+        if isinstance(col, str) and 'free' in col.lower()
+        and 'kick' in col.lower() and 'taken' in col.lower()
+    ]
+    for col in taken_cols:
+        mask |= _truthy_series(df[col])
+
+    if not taken_cols and 'event' in df.columns:
+        mask |= df['event'].astype(str).str.strip().str.lower().isin({
+            'free kick', 'free-kick', 'direct free kick', 'indirect free kick',
+        })
+
+    return mask
+
+def _free_kick_events(df: pd.DataFrame, min_x: float = 60) -> pd.DataFrame:
+    free_kicks = df[_free_kick_taken_mask(df)].copy()
+    if free_kicks.empty:
+        return free_kicks
+
+    if min_x is not None and 'x' in free_kicks.columns:
+        free_kicks = free_kicks[pd.to_numeric(free_kicks['x'], errors='coerce') > min_x]
+        if free_kicks.empty:
+            return free_kicks
+
+    subset = [
+        col for col in ['team_name', 'period_id', 'time_min', 'time_sec', 'player_name', 'x', 'y']
+        if col in free_kicks.columns
+    ]
+    if subset:
+        free_kicks = free_kicks.drop_duplicates(subset=subset)
+    return free_kicks
+
+def _clean_records(df: pd.DataFrame) -> list:
+    if df.empty or 'event' not in df.columns:
+        return []
+    clean = df[~df['event'].isin(SKIP_EVENTS)].copy()
+    clean['_abs_time'] = clean.apply(_event_seconds, axis=1)
+    sort_cols = [c for c in ['period_id', '_abs_time', 'event_id'] if c in clean.columns]
+    if sort_cols:
+        clean = clean.sort_values(sort_cols)
+    return clean.to_dict('records')
+
+def _safe_xy(row, x_col='x', y_col='y'):
+    try:
+        x = float(row.get(x_col))
+        y = float(row.get(y_col))
+    except Exception:
+        return None
+    if np.isnan(x) or np.isnan(y):
+        return None
+    return x, y
+
 
 # ════════════════════════════════════════════════════════════════
 # OFFENSIVE DATA
 # ════════════════════════════════════════════════════════════════
 
-def _compute_buildup(matches, team_name):
-    total_passes = long_passes = gk_passes = gk_short = 0
-    zone_counts  = {'Left': 0, 'Center': 0, 'Right': 0}
-    player_d3    = {}
-    coords       = []
-
-    for _, df in matches:
-        team   = df[df['team_name'] == team_name]
-        passes = team[team['event'] == 'Pass']
-        total_passes += len(passes)
-        if 'Long ball' in passes.columns:
-            long_passes += int(passes['Long ball'].notna().sum())
-
-        for _, row in passes.iterrows():
-            zone_counts[_zone_y(float(row['y']))] += 1
-            is_long = pd.notna(row.get('Long ball'))
-            coords.append({'x': float(row['x']), 'y': float(row['y']),
-                           'type': 'Long' if is_long else 'Short'})
-
-        gk = passes[passes['x'] < 15]
-        gk_passes += len(gk)
-        if 'Pass End X' in gk.columns:
-            gk_short += int((gk['Pass End X'].fillna(0) < gk['x'] + 30).sum())
-
-        d3 = passes[passes['x'] < 33]
-        for name in d3['player_name']:
-            player_d3[name] = player_d3.get(name, 0) + 1
-
-    n  = max(len(matches), 1)
-    zt = max(sum(zone_counts.values()), 1)
-    return {
-        'passes_per_game': round(total_passes / n, 1),
-        'long_pct':        _safe_pct(long_passes, total_passes),
-        'short_pct':       _safe_pct(total_passes - long_passes, total_passes),
-        'left_pct':        _safe_pct(zone_counts['Left'],   zt),
-        'center_pct':      _safe_pct(zone_counts['Center'], zt),
-        'right_pct':       _safe_pct(zone_counts['Right'],  zt),
-        'gk_short_pct':    _safe_pct(gk_short, gk_passes),
-        'top_builders':    sorted(player_d3.items(), key=lambda x: -x[1])[:5],
-        'coords':          coords[:800],
-    }
-
-
-def _compute_final_third(matches, team_name):
-    entries      = []
-    after_entry  = {'cross': 0, 'shot': 0, 'pass': 0, 'duel': 0, 'other': 0}
-
-    for _, df in matches:
-        team = df[df['team_name'] == team_name].reset_index(drop=True)
-        recs = team.to_dict('records')
-
-        for i, row in enumerate(recs):
-            if row['event'] != 'Pass':
-                continue
-            ex = row.get('Pass End X')
-            if ex is None or pd.isna(ex):
-                continue
-            if float(ex) >= 66 and float(row['x']) < 66:
-                ey     = row.get('Pass End Y', row['y']) or row['y']
-                method = 'Deep Pass' if pd.notna(row.get('Long ball')) else 'Short Pass'
-                entries.append({'x': float(ex), 'y': float(ey), 'method': method})
-
-                # What happens next?
-                for j in range(i + 1, min(i + 8, len(recs))):
-                    nxt = recs[j]
-                    if nxt['event'] in SKIP_EVENTS:
-                        continue
-                    if nxt['event'] in SHOT_EVENTS:
-                        after_entry['shot'] += 1
-                    elif nxt['event'] == 'Pass' and pd.notna(nxt.get('Cross')):
-                        after_entry['cross'] += 1
-                    elif nxt['event'] in {'Challenge', 'Tackle', 'Aerial'}:
-                        after_entry['duel'] += 1
-                    elif nxt['event'] == 'Pass':
-                        after_entry['pass'] += 1
-                    else:
-                        after_entry['other'] += 1
-                    break
-
-        # Take Ons near F3 as ball carry proxy
-        for _, row in team[
-            (team['event'] == 'Take On') & (team['x'] >= 60)
-        ].iterrows():
-            entries.append({'x': float(row['x']), 'y': float(row['y']), 'method': 'Ball Carry'})
-
-    method_c = {'Short Pass': 0, 'Deep Pass': 0, 'Ball Carry': 0}
-    zone_c   = {'Left': 0, 'Center': 0, 'Right': 0}
-    for e in entries:
-        method_c[e['method']] = method_c.get(e['method'], 0) + 1
-        zone_c[_zone_y(e['y'])] += 1
-
-    n  = max(len(matches), 1)
-    tm = max(sum(method_c.values()), 1)
-    tz = max(sum(zone_c.values()), 1)
-    ta = max(sum(after_entry.values()), 1)
-
-    return {
-        'per_game': round(len(entries) / n, 1),
-        'method':   {k: _safe_pct(v, tm) for k, v in method_c.items()},
-        'zone':     {k: _safe_pct(v, tz) for k, v in zone_c.items()},
-        'after':    {k: _safe_pct(v, ta) for k, v in after_entry.items()},
-        'coords':   entries[:400],
-    }
-
-
-def _compute_15s_outcomes(matches, team_name):
-    outcomes = {'f3_entry': 0, 'shot': 0, 'on_target': 0, 'goal': 0, 'turnover': 0}
-    total    = 0
-
-    TRIGGERS = {'Ball recovery', 'Interception', 'Tackle'}
-
-    for _, df in matches:
-        recs = df.reset_index(drop=True).to_dict('records')
-        for i, row in enumerate(recs):
-            if (row['team_name'] != team_name or
-                    row['event'] not in TRIGGERS or
-                    int(row.get('outcome', 1)) != 1 or
-                    float(row['x']) >= 50):
-                continue
-
-            total += 1
-            t0 = float(row['time_min']) * 60 + float(row.get('time_sec') or 0)
-            f3, shot, ot, goal, turned = False, False, False, False, False
-
-            for j in range(i + 1, len(recs)):
-                r2 = recs[j]
-                t2 = float(r2['time_min']) * 60 + float(r2.get('time_sec') or 0)
-                if t2 - t0 > 15:
-                    break
-                if r2['event'] in SKIP_EVENTS:
-                    continue
-                if r2['team_name'] == team_name:
-                    if float(r2.get('x', 0)) >= 66:
-                        f3 = True
-                    if r2['event'] in SHOT_EVENTS:
-                        shot = True
-                        if r2['event'] in {'Saved Shot', 'Goal'}:
-                            ot = True
-                        if r2['event'] == 'Goal':
-                            goal = True
-                else:
-                    if r2['event'] not in SKIP_EVENTS:
-                        turned = True
-                        break
-
-            if f3:     outcomes['f3_entry']  += 1
-            if shot:   outcomes['shot']       += 1
-            if ot:     outcomes['on_target']  += 1
-            if goal:   outcomes['goal']        += 1
-            if turned: outcomes['turnover']   += 1
-
-    t = max(total, 1)
-    return {k: _safe_pct(v, t) for k, v in outcomes.items()} | {'total': total}
-
-
-def _compute_playmaker(matches, team_name):
-    prog_dict  = {}
-    total_dict = {}
-    fb_l = fb_r = wl = wr = 0
-    ppg_list = []
-
-    for _, df in matches:
-        team   = df[df['team_name'] == team_name]
-        passes = team[team['event'] == 'Pass']
-        ppg_list.append(len(passes))
-
-        for _, row in passes.iterrows():
-            name = row.get('player_name', '?') or '?'
-            ex   = row.get('Pass End X')
-            if ex is not None and not pd.isna(ex):
-                total_dict[name] = total_dict.get(name, 0) + 1
-                if float(ex) - float(row['x']) > 10 and float(row['x']) < 66:
-                    prog_dict[name] = prog_dict.get(name, 0) + 1
-
-            x, y = float(row['x']), float(row['y'])
-            if 25 < x < 66 and y < 25:  fb_l += 1
-            if 25 < x < 66 and y > 75:  fb_r += 1
-
-        f3 = team[team['x'] >= 66]
-        wl += len(f3[f3['y'] < 25])
-        wr += len(f3[f3['y'] > 75])
-
-    n  = max(len(matches), 1)
-    top_pm = sorted(prog_dict.items(), key=lambda x: -x[1])
-    pm_name  = top_pm[0][0] if top_pm else '—'
-    pm_prog  = top_pm[0][1] if top_pm else 0
-    pm_total = total_dict.get(pm_name, 0)
-
-    return {
-        'pm_name':          pm_name,
-        'pm_prog':          pm_prog,
-        'pm_total':         pm_total,
-        'passes_per_game':  round(sum(ppg_list) / n, 1),
-        'fb_left_pg':       round(fb_l / n, 1),
-        'fb_right_pg':      round(fb_r / n, 1),
-        'wing_left_pg':     round(wl / n, 1),
-        'wing_right_pg':    round(wr / n, 1),
-        'top_progressive':  top_pm[:5],
-    }
-
-
-def _compute_cross_map(matches, team_name):
-    """Collect all cross event locations and zone breakdowns."""
-    coords = []
-
-    for _, df in matches:
-        team   = df[df['team_name'] == team_name]
-        passes = team[team['event'] == 'Pass']
-        if 'Cross' not in passes.columns:
-            continue
-        crosses = passes[passes['Cross'].notna()]
-        for _, row in crosses.iterrows():
-            coords.append({
-                'x':       float(row['x']),
-                'y':       float(row['y']),
-                'success': int(row.get('outcome', 0) or 0) == 1,
-            })
-
-    total = len(coords)
-    n     = max(len(matches), 1)
-
-    # Zone breakdown (attacking half only, by flank)
-    zones = {
-        'Left Flank (deep)':   0,
-        'Left Flank (wide)':   0,
-        'Right Flank (wide)':  0,
-        'Right Flank (deep)':  0,
-        'Central':             0,
-    }
-    for c in coords:
-        x, y = c['x'], c['y']
-        if y < 33:
-            zones['Left Flank (deep)' if x >= 80 else 'Left Flank (wide)'] += 1
-        elif y > 67:
-            zones['Right Flank (deep)' if x >= 80 else 'Right Flank (wide)'] += 1
+def _estimate_dimensions(df, team_name, phase):
+    team_df = df[df['team_name'] == team_name]
+    team_df = team_df.dropna(subset=['x', 'y'])
+    
+    if phase == 'low':
+        phase_df = team_df[team_df['x'] < 33.3]
+    elif phase == 'mid':
+        phase_df = team_df[(team_df['x'] >= 33.3) & (team_df['x'] < 66.6)]
+    else:
+        phase_df = team_df[team_df['x'] >= 66.6]
+        
+    if len(phase_df) < 5:
+        if phase == 'low':
+            return 15, 36, 50
+        elif phase == 'mid':
+            return 41, 34, 51
         else:
-            zones['Central'] += 1
+            return 58, 35, 39
+            
+    xs = phase_df['x'].values
+    ys = phase_df['y'].values
+    
+    min_x = np.percentile(xs, 15)
+    max_x = np.percentile(xs, 85)
+    min_y = np.percentile(ys, 15)
+    max_y = np.percentile(ys, 85)
+    
+    line_height = round(min_x * 1.05)
+    team_length = round((max_x - min_x) * 1.05)
+    team_width = round((max_y - min_y) * 0.68)
+    
+    line_height = max(5, min(95, line_height))
+    team_length = max(10, min(80, team_length))
+    team_width = max(15, min(68, team_width))
+    
+    return line_height, team_length, team_width
 
-    return {
-        'coords':      coords,
-        'total':       total,
-        'per_game':    round(total / n, 1),
-        'success_pct': _safe_pct(sum(1 for c in coords if c['success']), total),
-        'zones':       {k: _safe_pct(v, max(total, 1)) for k, v in zones.items()},
-        'zones_raw':   zones,
-    }
+def _draw_possession_line_height(matches, team_name, rival_label):
+    if not matches:
+        raise ValueError("No match data available.")
+    
+    fname, df = matches[0]
+    
+    low_lh, low_len, low_wid = _estimate_dimensions(df, team_name, 'low')
+    mid_lh, mid_len, mid_wid = _estimate_dimensions(df, team_name, 'mid')
+    f3_lh, f3_len, f3_wid = _estimate_dimensions(df, team_name, 'f3')
+    
+    fig, axes = plt.subplots(1, 3, figsize=(14, 8.5), facecolor='#0e1b0f')
+    
+    phases = [
+        ('Build Up Low', low_lh, low_len, low_wid),
+        ('Build Up Mid', mid_lh, mid_len, mid_wid),
+        ('Final Third Phase', f3_lh, f3_len, f3_wid)
+    ]
+    
+    for idx, (title, lh, length, width) in enumerate(phases):
+        ax = axes[idx]
+        ax.set_facecolor('#0e1b0f')
+        
+        # Draw vertical grass stripes
+        for i in range(10):
+            y0 = i * 10
+            ax.fill_between([0, 100], y0, y0 + 10,
+                            color='#18331b' if i % 2 == 0 else '#122615',
+                            alpha=0.9, zorder=0)
+            
+        lc = (1.0, 1.0, 1.0, 0.4)
+        lw = 1.4
+        
+        # Pitch outline
+        ax.plot([0, 100, 100, 0, 0], [0, 0, 100, 100, 0], color=lc, linewidth=lw, zorder=3)
+        # Midfield line
+        ax.plot([0, 100], [50, 50], color=lc, linewidth=lw, zorder=3)
+        # Center circle
+        center_circle = plt.Circle((50, 50), 9.15, color=lc, fill=False, linewidth=lw, zorder=3)
+        ax.add_patch(center_circle)
+        ax.scatter([50.0], [50.0], color=lc, s=12, zorder=3)
+        
+        # Bottom penalty area
+        ax.plot([21.1, 21.1, 78.9, 78.9], [0, 17, 17, 0], color=lc, linewidth=lw, zorder=3)
+        ax.plot([40.9, 40.9, 59.1, 59.1], [0, 5.8, 5.8, 0], color=lc, linewidth=lw - 0.3, zorder=3)
+        
+        # Top penalty area
+        ax.plot([21.1, 21.1, 78.9, 78.9], [100, 83, 83, 100], color=lc, linewidth=lw, zorder=3)
+        ax.plot([40.9, 40.9, 59.1, 59.1], [100, 94.2, 94.2, 100], color=lc, linewidth=lw - 0.3, zorder=3)
+        
+        # DIRECTION indicator on the right side
+        ax.annotate('', xy=(95, 90), xytext=(95, 10),
+                    arrowprops=dict(arrowstyle="->", color=lc, lw=1.2, alpha=0.6))
+        ax.text(97, 50, 'DIRECTION', color=(1, 1, 1, 0.4), fontsize=8, rotation=90, ha='center', va='center', fontweight='bold')
+        
+        # Draw blue box
+        lh_opta = lh / 1.05
+        len_opta = length / 1.05
+        wid_opta = width / 0.68
+        
+        py_min = lh_opta
+        py_max = lh_opta + len_opta
+        px_min = 50.0 - wid_opta / 2.0
+        px_max = 50.0 + wid_opta / 2.0
+        
+        # Cap dimensions to stay inside the pitch
+        if py_max > 100:
+            py_max = 100.0
+            py_min = max(0.0, 100.0 - len_opta)
+        if px_min < 0:
+            px_min = 0.0
+            px_max = min(100.0, wid_opta)
+        if px_max > 100:
+            px_max = 100.0
+            px_min = max(0.0, 100.0 - wid_opta)
+            
+        rect = plt.Rectangle((px_min, py_min), px_max - px_min, py_max - py_min,
+                             facecolor='#3b82f6', alpha=0.35, edgecolor='#3b82f6', linewidth=2.0, zorder=4)
+        ax.add_patch(rect)
+        
+        # Draw brackets and text boxes
+        # 1. Width bracket
+        wy = py_max + 3.5
+        if wy > 98: wy = py_max - 3.5
+        ax.plot([px_min, px_max], [wy, wy], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+        ax.plot([px_min, px_min], [wy - 1.5, wy + 1.5], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+        ax.plot([px_max, px_max], [wy - 1.5, wy + 1.5], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+        ax.text(50.0, wy, f"{width}m", color='white', fontsize=9, fontweight='bold',
+                ha='center', va='center', bbox=dict(boxstyle='round,pad=0.2', facecolor='#1f2937', edgecolor='none'), zorder=6)
+        
+        # 2. Length bracket
+        lx = px_min - 3.5
+        if lx < 2: lx = px_min + 3.5
+        ax.plot([lx, lx], [py_min, py_max], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+        ax.plot([lx - 1.5, lx + 1.5], [py_min, py_min], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+        ax.plot([lx - 1.5, lx + 1.5], [py_max, py_max], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+        ax.text(lx, (py_min + py_max)/2.0, f"{length}m", color='white', fontsize=9, fontweight='bold',
+                ha='center', va='center', bbox=dict(boxstyle='round,pad=0.2', facecolor='#1f2937', edgecolor='none'), zorder=6)
+                
+        # 3. Line height bracket
+        hx = px_max + 3.5
+        if hx > 98: hx = px_max - 3.5
+        if py_min > 2.0:
+            ax.plot([hx, hx], [0, py_min], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+            ax.plot([hx - 1.5, hx + 1.5], [0, 0], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+            ax.plot([hx - 1.5, hx + 1.5], [py_min, py_min], color='white', alpha=0.7, linewidth=1.2, zorder=5)
+            ax.text(hx, py_min/2.0, f"{lh}m", color='white', fontsize=9, fontweight='bold',
+                    ha='center', va='center', bbox=dict(boxstyle='round,pad=0.2', facecolor='#1f2937', edgecolor='none'), zorder=6)
+        
+        ax.set_xlim(-2, 102)
+        ax.set_ylim(-3, 103)
+        ax.set_aspect('equal')
+        ax.axis('off')
+        ax.set_title(title.upper(), color='#fbbf24', fontsize=12, fontweight='bold', pad=15)
+        
+    plt.tight_layout()
+    img_b64 = _fig_b64(fig)
+    return img_b64
 
+def _build_possession_line_height(matches, team_name, rival_label):
+    try:
+        img_b64 = _draw_possession_line_height(matches, team_name, rival_label)
+        
+        return _card(
+            html.Div(children=[
+                html.P("Calculated vertical line height, team length, and horizontal team width "
+                       "during low build-up, mid build-up, and final third possession phases.",
+                       style={'fontSize': '0.75rem', 'color': 'var(--text-secondary)', 'marginBottom': '16px', 'textAlign': 'center'}),
+                html.Img(src=img_b64, style={'width': '100%', 'borderRadius': '8px'}),
+            ]),
+            title='IN POSSESSION LINE HEIGHT & TEAM LENGTH',
+            icon='⚽'
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
 
-def _compute_z14(matches, team_name):
-    passes_z14 = duel_won = duel_lost = shots_z14 = 0
+def _build_offensive(matches, team_name, rival_label):
+    sections = []
+    try:
+        shot_img, shots = _draw_shot_map(matches, team_name)
+        goals = [s for s in shots if s['event'] == 'Goal']
+        on_target = [s for s in shots if s['event'] in {'Goal', 'Saved Shot'}]
+        shot_card = _card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
+                        _pill('Shots', len(shots), BLUE),
+                        _pill('On Target', len(on_target), GREEN),
+                        _pill('Goals', len(goals), GOLD),
+                        _pill('Shot Conv.', f"{_safe_pct(len(goals), len(shots))}%", PURPLE),
+                    ]),
+                    html.Div('SHOT OUTCOMES', style={
+                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
+                        'letterSpacing': '1px', 'marginBottom': '8px',
+                    }),
+                    _bar('Goals', _safe_pct(len(goals), len(shots)), GOLD),
+                    _bar('Saved', _safe_pct(len([s for s in shots if s['event'] == 'Saved Shot']), len(shots)), GREEN),
+                    _bar('Miss / Post', _safe_pct(len([s for s in shots if s['event'] in {'Miss', 'Post'}]), len(shots)), RED),
+                ], md=4),
+                dbc.Col([
+                    html.Img(src=shot_img, style={'width': '100%', 'maxHeight': '430px', 'objectFit': 'contain', 'borderRadius': '8px'}),
+                    html.Div('★ Goal  ● Saved  ○ Miss  ◆ Post', style={
+                        'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
+                        'textAlign': 'center', 'marginTop': '4px',
+                    }),
+                ], md=8),
+            ]),
+            title=f'{rival_label} — Offensive Phase Shot Map', icon='⚔'
+        )
+        sections.append(shot_card)
+    except Exception:
+        pass
 
-    for _, df in matches:
-        team = df[df['team_name'] == team_name]
+    try:
+        seq_img, goal_chains = _draw_goal_sequences_filtered(matches, team_name)
+        if seq_img:
+            sequence_rows = []
+            for item in goal_chains[:4]:
+                chain = item['chain']
+                sequence_rows.append(html.Div(style={
+                    'display': 'flex', 'justifyContent': 'space-between',
+                    'padding': '6px 0', 'borderBottom': '1px solid rgba(255,255,255,0.05)',
+                }, children=[
+                    html.Span(item['match'], style={'fontSize': '0.75rem', 'color': 'var(--text-secondary)'}),
+                    html.Span(f"{item.get('origin', 'open_play').replace('_', ' ')} · {len(chain)} actions", style={'fontSize': '0.75rem', 'fontWeight': '700', 'color': GOLD}),
+                ]))
+            seq_card = _card(
+                dbc.Row([
+                    dbc.Col([
+                        html.Div('GOAL CHAINS FOUND', style={
+                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
+                            'letterSpacing': '1px', 'marginBottom': '8px',
+                        }),
+                        html.Div(sequence_rows),
+                    ], md=4),
+                    dbc.Col([
+                        html.Img(src=seq_img, style={'width': '100%', 'maxHeight': '430px', 'objectFit': 'contain', 'borderRadius': '8px'}),
+                        html.Div('Last attacking actions in the 10 seconds before each goal', style={
+                            'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
+                            'textAlign': 'center', 'marginTop': '4px',
+                        }),
+                    ], md=8),
+                ]),
+                title='Goal Sequence Map', icon='🥅'
+            )
+            sections.append(seq_card)
+    except Exception:
+        pass
 
-        if 'Pass End X' in df.columns and 'Pass End Y' in df.columns:
-            p = team[team['event'] == 'Pass']
-            z14 = p[
-                (p['Pass End X'].fillna(0) >= 66) &
-                (p['Pass End Y'].fillna(50).between(33, 67))
-            ]
-            passes_z14 += len(z14)
+    possession = _build_possession_line_height(matches, team_name, rival_label)
+    if possession:
+        sections.append(possession)
 
-        duels = team[
-            team['event'].isin({'Challenge', 'Tackle', 'Aerial'}) &
-            (team['x'] >= 66) &
-            (team['y'].between(33, 67))
-        ]
-        duel_won  += int((duels['outcome'] == 1).sum())
-        duel_lost += int((duels['outcome'] == 0).sum())
+    if len(sections) >= 2:
+        top_row = dbc.Row([
+            dbc.Col(sections[0], md=6),
+            dbc.Col(sections[1], md=6),
+        ], className='g-3', style={'marginBottom': '12px'})
+        rest = sections[2:]
+        return html.Div([top_row] + rest)
 
-        shots = team[
-            team['event'].isin(SHOT_EVENTS) &
-            (team['x'] >= 66) &
-            (team['y'].between(33, 67))
-        ]
-        shots_z14 += len(shots)
-
-    n  = max(len(matches), 1)
-    dt = max(duel_won + duel_lost, 1)
-    return {
-        'passes_pg':   round(passes_z14 / n, 1),
-        'duel_win':    _safe_pct(duel_won, dt),
-        'duels_pg':    round((duel_won + duel_lost) / n, 1),
-        'shots_pg':    round(shots_z14 / n, 1),
-    }
-
-
-def _compute_shot_origin(matches, team_name):
-    origins  = {'cross': 0, 'set_piece': 0, 'fast_break': 0, 'open_play': 0}
-    zones    = {'small_box': 0, 'inside_box': 0, 'outside_box': 0}
-    headers  = on_target = goals = total_shots = 0
-    shot_coords = []
-    finishers = {}
-
-    for _, df in matches:
-        team  = df[df['team_name'] == team_name]
-        shots = team[team['event'].isin(SHOT_EVENTS)]
-        total_shots += len(shots)
-
-        for _, row in shots.iterrows():
-            ev = row['event']
-            if ev in {'Saved Shot', 'Goal'}:
-                on_target += 1
-            if ev == 'Goal':
-                goals += 1
-                name = row.get('player_name', '?') or '?'
-                finishers[name] = finishers.get(name, 0) + 1
-
-            if pd.notna(row.get('Cross')):
-                origins['cross'] += 1
-            elif any(pd.notna(row.get(c)) for c in ['Set piece', 'Free kick', 'From corner']):
-                origins['set_piece'] += 1
-            elif pd.notna(row.get('Fast break')):
-                origins['fast_break'] += 1
-            else:
-                origins['open_play'] += 1
-
-            if pd.notna(row.get('Head')):
-                headers += 1
-
-            in_small = any(pd.notna(row.get(c)) for c in SMALL_BOX_COLS if c in row.index)
-            in_box   = any(pd.notna(row.get(c)) for c in INSIDE_BOX_COLS if c in row.index)
-            in_out   = any(pd.notna(row.get(c)) for c in OUTSIDE_BOX_COLS if c in row.index)
-
-            if in_small:
-                zones['small_box']  += 1
-                zones['inside_box'] += 1
-            elif in_box:
-                zones['inside_box'] += 1
-            elif in_out:
-                zones['outside_box'] += 1
-            else:
-                rx = float(row['x'])
-                if rx >= 83:
-                    zones['small_box']  += 1
-                    zones['inside_box'] += 1
-                elif rx >= 66:
-                    zones['inside_box'] += 1
-                else:
-                    zones['outside_box'] += 1
-
-            shot_coords.append({
-                'x': float(row['x']), 'y': float(row['y']),
-                'event': ev, 'in_box': in_box or in_small,
-            })
-
-    n = max(len(matches), 1)
-    t = max(total_shots, 1)
-    return {
-        'total_pg':      round(total_shots / n, 1),
-        'on_target_pct': _safe_pct(on_target, total_shots),
-        'goals_pg':      round(goals / n, 1),
-        'origins':       {k: _safe_pct(v, t) for k, v in origins.items()},
-        'zones':         {k: _safe_pct(v, t) for k, v in zones.items()},
-        'header_pct':    _safe_pct(headers, total_shots),
-        'coords':        shot_coords,
-        'finishers':     sorted(finishers.items(), key=lambda x: -x[1])[:5],
-    }
+    return html.Div(sections) if sections else html.Div(className='goz-form-section', children=[
+        html.Div('No offensive data available.', className='goz-card-desc')
+    ])
 
 
 # ════════════════════════════════════════════════════════════════
@@ -667,6 +678,8 @@ def _compute_aerials(matches, team_name):
 def _compute_vulnerability(matches, team_name):
     f3_c = {'Left': 0, 'Center': 0, 'Right': 0}
     z14_c = offside = 0
+    entries_coords = []
+    z14_coords = []
 
     for _, df in matches:
         opp      = df[df['team_name'] != team_name]
@@ -680,13 +693,34 @@ def _compute_vulnerability(matches, team_name):
             ]
             for _, row in entries.iterrows():
                 ey = float(row.get('Pass End Y') or row['y'])
-                f3_c[_zone_y(ey)] += 1
+                zone = _zone_y(ey)
+                f3_c[zone] += 1
+                try:
+                    entries_coords.append({
+                        'x': float(row['x']),
+                        'y': float(row['y']),
+                        'end_x': float(row['Pass End X']),
+                        'end_y': ey,
+                        'zone': zone,
+                    })
+                except Exception:
+                    pass
 
             z14 = opp_passes[
                 (opp_passes['Pass End X'].fillna(0) >= 66) &
                 (opp_passes['Pass End Y'].fillna(50).between(33, 67))
             ]
             z14_c += len(z14)
+            for _, row in z14.iterrows():
+                try:
+                    z14_coords.append({
+                        'x': float(row['x']),
+                        'y': float(row['y']),
+                        'end_x': float(row['Pass End X']),
+                        'end_y': float(row['Pass End Y']),
+                    })
+                except Exception:
+                    pass
 
         offside += len(team_ev[team_ev['event'] == 'Offside provoked'])
 
@@ -697,6 +731,9 @@ def _compute_vulnerability(matches, team_name):
         'f3_pg':        round(sum(f3_c.values()) / n, 1),
         'z14_pg':       round(z14_c / n, 1),
         'offside_pg':   round(offside / n, 1),
+        'entries_raw':   f3_c,
+        'entries_coords': entries_coords[:120],
+        'z14_coords':    z14_coords[:80],
     }
 
 
@@ -746,73 +783,132 @@ def _compute_pre_goal(matches, team_name):
 # ════════════════════════════════════════════════════════════════
 
 def _compute_transitions(matches, team_name):
-    RECOVERY  = {'Ball recovery', 'Interception', 'Tackle'}
-    LOSS_EVS  = {'Dispossessed', 'Error'}
-
     wz = {'Defensive 3rd': 0, 'Middle 3rd': 0, 'Final 3rd': 0}
     lz = {'Defensive 3rd': 0, 'Middle 3rd': 0, 'Final 3rd': 0}
-    wo = {'f3': 0, 'shot': 0, 'opp_shot': 0}
-    lo = {'opp_f3': 0, 'opp_shot': 0, 'recovered': 0}
+    wo = {'goal': 0, 'shot': 0, 'f3': 0, 'lost': 0, 'retained': 0}
+    lo = {'opp_goal': 0, 'opp_shot': 0, 'opp_f3': 0, 'recovered': 0, 'survived': 0}
     wp = {}; lp = {}
     wc = []; lc = []
+    w_after = []; l_after = []
     wt = lt = 0
 
     for _, df in matches:
-        recs = df.to_dict('records')
+        recs = _clean_records(df)
         for i, row in enumerate(recs):
             if row['event'] in SKIP_EVENTS:
                 continue
 
-            t0 = float(row['time_min']) * 60 + float(row.get('time_sec') or 0)
+            t0 = float(row.get('_abs_time', _event_seconds(row)))
 
             # ── Ball WIN ──────────────────────────────────────────
             if (row['team_name'] == team_name and
-                    row['event'] in RECOVERY and
+                    row['event'] in RECOVERY_EVENTS and
                     int(row.get('outcome', 1)) == 1):
+                xy = _safe_xy(row)
+                if not xy:
+                    continue
                 wt += 1
-                wz[_zone_x(float(row['x']))] += 1
+                wz[_zone_x(xy[0])] += 1
                 name = row.get('player_name', '?') or '?'
                 wp[name] = wp.get(name, 0) + 1
-                wc.append({'x': float(row['x']), 'y': float(row['y'])})
+
+                reached_f3 = shot = goal = lost = False
+                final_xy = None
+                final_event = None
 
                 for j in range(i + 1, len(recs)):
                     r2 = recs[j]
-                    t2 = float(r2['time_min']) * 60 + float(r2.get('time_sec') or 0)
-                    if t2 - t0 > 15: break
+                    t2 = float(r2.get('_abs_time', _event_seconds(r2)))
+                    if t2 - t0 > 10: break
                     if r2['event'] in SKIP_EVENTS: continue
                     if r2['team_name'] == team_name:
-                        if float(r2.get('x', 0)) >= 66:
-                            wo['f3'] += 1
+                        xy2 = _safe_xy(r2)
+                        if xy2:
+                            final_xy = xy2
+                            final_event = r2['event']
+                        if float(r2.get('x', 0) or 0) >= 66:
+                            reached_f3 = True
                         if r2['event'] in SHOT_EVENTS:
-                            wo['shot'] += 1
+                            shot = True
+                            if r2['event'] == 'Goal':
+                                goal = True
+                            break
                     else:
-                        if r2['event'] in SHOT_EVENTS:
-                            wo['opp_shot'] += 1
+                        lost = True
                         break
+
+                if goal:
+                    outcome = 'goal'
+                elif shot:
+                    outcome = 'shot'
+                elif reached_f3:
+                    outcome = 'f3'
+                elif lost:
+                    outcome = 'lost'
+                else:
+                    outcome = 'retained'
+                wo[outcome] += 1
+                wc.append({'x': xy[0], 'y': xy[1], 'outcome': outcome})
+                if final_xy:
+                    w_after.append({
+                        'x0': xy[0], 'y0': xy[1], 'x1': final_xy[0], 'y1': final_xy[1],
+                        'event': final_event, 'outcome': outcome,
+                    })
 
             # ── Ball LOSS ─────────────────────────────────────────
             if (row['team_name'] == team_name and
-                    row['event'] in LOSS_EVS):
+                    row['event'] in LOSS_EVENTS):
+                xy = _safe_xy(row)
+                if not xy:
+                    continue
                 lt += 1
-                lz[_zone_x(float(row['x']))] += 1
+                lz[_zone_x(xy[0])] += 1
                 name = row.get('player_name', '?') or '?'
                 lp[name] = lp.get(name, 0) + 1
-                lc.append({'x': float(row['x']), 'y': float(row['y'])})
+
+                opp_reached_f3 = opp_shot = opp_goal = recovered = False
+                final_xy = None
+                final_event = None
 
                 for j in range(i + 1, len(recs)):
                     r2 = recs[j]
-                    t2 = float(r2['time_min']) * 60 + float(r2.get('time_sec') or 0)
-                    if t2 - t0 > 15: break
+                    t2 = float(r2.get('_abs_time', _event_seconds(r2)))
+                    if t2 - t0 > 10: break
                     if r2['event'] in SKIP_EVENTS: continue
                     if r2['team_name'] != team_name:
-                        if float(r2.get('x', 0)) >= 66:
-                            lo['opp_f3'] += 1
+                        xy2 = _safe_xy(r2)
+                        if xy2:
+                            final_xy = xy2
+                            final_event = r2['event']
+                        if float(r2.get('x', 0) or 0) >= 66:
+                            opp_reached_f3 = True
                         if r2['event'] in SHOT_EVENTS:
-                            lo['opp_shot'] += 1
+                            opp_shot = True
+                            if r2['event'] == 'Goal':
+                                opp_goal = True
+                            break
                     else:
-                        if r2['event'] in RECOVERY:
-                            lo['recovered'] += 1
+                        if r2['event'] in RECOVERY_EVENTS:
+                            recovered = True
                         break
+
+                if opp_goal:
+                    outcome = 'opp_goal'
+                elif opp_shot:
+                    outcome = 'opp_shot'
+                elif opp_reached_f3:
+                    outcome = 'opp_f3'
+                elif recovered:
+                    outcome = 'recovered'
+                else:
+                    outcome = 'survived'
+                lo[outcome] += 1
+                lc.append({'x': xy[0], 'y': xy[1], 'outcome': outcome})
+                if final_xy:
+                    l_after.append({
+                        'x0': xy[0], 'y0': xy[1], 'x1': final_xy[0], 'y1': final_xy[1],
+                        'event': final_event, 'outcome': outcome,
+                    })
 
     n = max(len(matches), 1)
 
@@ -825,15 +921,19 @@ def _compute_transitions(matches, team_name):
             'total': wt, 'per_game': round(wt / n, 1),
             'zones': _pct_dict(wz, wt),
             'outcomes': _pct_dict(wo, wt),
+            'outcome_counts': wo,
             'top': sorted(wp.items(), key=lambda x: -x[1])[:8],
             'coords': wc[:400],
+            'after': w_after[:160],
         },
         'loss': {
             'total': lt, 'per_game': round(lt / n, 1),
             'zones': _pct_dict(lz, lt),
             'outcomes': _pct_dict(lo, lt),
+            'outcome_counts': lo,
             'top': sorted(lp.items(), key=lambda x: -x[1])[:8],
             'coords': lc[:400],
+            'after': l_after[:160],
         },
     }
 
@@ -849,11 +949,9 @@ def _compute_set_pieces(matches, team_name):
     for _, df in matches:
         team = df[df['team_name'] == team_name]
 
-        # Corners (type_id == 6)
-        corners += len(team[team['type_id'] == 6])
+        corners += len(_corner_events(team))
 
-        # Free kicks (where event contains free kick)
-        fks += len(team[team['event'].astype(str).str.lower().str.contains('free kick')])
+        fks += len(_free_kick_events(team))
 
         # Shots
         shots = team[team['event'].isin(SHOT_EVENTS)]
@@ -880,17 +978,132 @@ def _compute_set_pieces(matches, team_name):
         'sp_goals': sp_goals,
         'coords': sp_shot_coords
     }
-
-
 # ════════════════════════════════════════════════════════════════
 # PITCH / VISUAL HELPERS
 # ════════════════════════════════════════════════════════════════
 
+class MockPitch:
+    def __init__(self, half=False, pitch_color='#0e1b0f', line_color='white', linewidth=1.4):
+        self.half = half
+        self.pitch_color = pitch_color
+        self.line_color = line_color
+        self.linewidth = linewidth
+
+    def draw(self, figsize=(10, 6.5)):
+        fig, ax = plt.subplots(figsize=figsize, facecolor=self.pitch_color)
+        ax.set_facecolor(self.pitch_color)
+        
+        # 1. Draw grass stripes (same green shades as pre_match.py)
+        if self.half:
+            for i in range(5):
+                x0 = 50 + i * 10
+                ax.fill_between([x0, x0 + 10], 0, 100,
+                                color='#18331b' if i % 2 == 0 else '#122615',
+                                alpha=0.9, zorder=0)
+        else:
+            for i in range(10):
+                x0 = i * 10
+                ax.fill_between([x0, x0 + 10], 0, 100,
+                                color='#18331b' if i % 2 == 0 else '#122615',
+                                alpha=0.9, zorder=0)
+
+        # 2. Draw lines
+        lc = (1.0, 1.0, 1.0, 0.4) # Semi-transparent white
+        lw = self.linewidth
+
+        if self.half:
+            # Half-pitch outline (x from 50 to 100, y from 0 to 100)
+            ax.plot([50, 100, 100, 50, 50], [0, 0, 100, 100, 0], color=lc, linewidth=lw, zorder=3)
+            # Penalty box
+            ax.plot([100, 83, 83, 100], [21.1, 21.1, 78.9, 78.9], color=lc, linewidth=lw, zorder=3)
+            # Six yard box
+            ax.plot([100, 94.2, 94.2, 100], [40.9, 40.9, 59.1, 59.1], color=lc, linewidth=lw - 0.3, zorder=3)
+            # Halfway line arc
+            from matplotlib.patches import Arc
+            halfway_arc = Arc((50, 50), 18.3, 18.3, theta1=270, theta2=90, color=lc, linewidth=lw, zorder=3)
+            ax.add_patch(halfway_arc)
+            # Penalty spot
+            ax.scatter([88.5], [50.0], color=lc, s=15, zorder=3)
+            
+            ax.set_xlim(48, 102)
+            ax.set_ylim(-3, 103)
+        else:
+            # Full pitch outline (x from 0 to 100, y from 0 to 100)
+            ax.plot([0, 100, 100, 0, 0], [0, 0, 100, 100, 0], color=lc, linewidth=lw, zorder=3)
+            # Midfield line
+            ax.plot([50, 50], [0, 100], color=lc, linewidth=lw, zorder=3)
+            # Center circle
+            center_circle = plt.Circle((50, 50), 9.15, color=lc, fill=False, linewidth=lw, zorder=3)
+            ax.add_patch(center_circle)
+            # Center spot
+            ax.scatter([50.0], [50.0], color=lc, s=15, zorder=3)
+            
+            # Left penalty area
+            ax.plot([0, 17, 17, 0], [21.1, 21.1, 78.9, 78.9], color=lc, linewidth=lw, zorder=3)
+            # Left six-yard box
+            ax.plot([0, 5.8, 5.8, 0], [40.9, 40.9, 59.1, 59.1], color=lc, linewidth=lw - 0.3, zorder=3)
+            # Left penalty spot
+            ax.scatter([11.5], [50.0], color=lc, s=15, zorder=3)
+
+            # Right penalty area
+            ax.plot([100, 83, 83, 100], [21.1, 21.1, 78.9, 78.9], color=lc, linewidth=lw, zorder=3)
+            # Right six-yard box
+            ax.plot([100, 94.2, 94.2, 100], [40.9, 40.9, 59.1, 59.1], color=lc, linewidth=lw - 0.3, zorder=3)
+            # Right penalty spot
+            ax.scatter([88.5], [50.0], color=lc, s=15, zorder=3)
+            
+            ax.set_xlim(-2, 102)
+            ax.set_ylim(-3, 103)
+
+        ax.set_aspect('equal')
+        ax.axis('off')
+        return fig, ax
+
+    def scatter(self, x, y, ax=None, **kwargs):
+        if ax is None:
+            ax = plt.gca()
+        # Filter out any kwargs that matplotlib scatter doesn't support but mplsoccer might
+        kwargs.pop('ax', None)
+        return ax.scatter(x, y, **kwargs)
+
+    def bin_statistic(self, x, y, statistic='count', bins=(6, 5)):
+        nx, ny = bins
+        xedges = np.linspace(0, 100, nx + 1)
+        yedges = np.linspace(0, 100, ny + 1)
+        counts, _, _ = np.histogram2d(x, y, bins=[xedges, yedges])
+        counts = counts.T
+        
+        x_grid, y_grid = np.meshgrid(xedges, yedges)
+        cx, cy = np.meshgrid((xedges[:-1] + xedges[1:]) / 2.0, (yedges[:-1] + yedges[1:]) / 2.0)
+        
+        return {
+            'statistic': counts,
+            'x_grid': x_grid,
+            'y_grid': y_grid,
+            'cx': cx,
+            'cy': cy
+        }
+
+    def heatmap(self, stat, ax, cmap='YlOrRd', edgecolors='none', linewidth=0, alpha=1.0, **kwargs):
+        mesh = ax.pcolormesh(stat['x_grid'], stat['y_grid'], stat['statistic'],
+                             cmap=cmap, edgecolors=edgecolors, linewidth=linewidth, alpha=alpha, **kwargs)
+        return mesh
+
+    def label_heatmap(self, stat, color='white', fontsize=12, ax=None, ha='center', va='center', fontweight='bold', str_format='{:.0f}', **kwargs):
+        if ax is None:
+            ax = plt.gca()
+        ny, nx = stat['statistic'].shape
+        for i in range(ny):
+            for j in range(nx):
+                val = stat['statistic'][i, j]
+                if val > 0:
+                    text = str_format.format(val)
+                    ax.text(stat['cx'][i, j], stat['cy'][i, j], text,
+                            color=color, fontsize=fontsize, ha=ha, va=va, fontweight=fontweight, **kwargs)
+
 def _make_pitch(half=False, figsize=(10, 6.5)):
-    p = Pitch(pitch_type='opta', pitch_color=PITCH_BG,
-              line_color=(1, 1, 1, 0.5), linewidth=1.4, half=half)
+    p = MockPitch(half=half, pitch_color=PITCH_BG)
     fig, ax = p.draw(figsize=figsize)
-    fig.patch.set_facecolor(PITCH_BG)
     return p, fig, ax
 
 
@@ -912,6 +1125,639 @@ def _legend(ax):
                     framealpha=0.7, facecolor=PITCH_BG, edgecolor='white')
     for t in leg.get_texts():
         t.set_color('white')
+
+def _draw_pitch_title(ax, title, color=GOLD):
+    ax.set_title(title, color=color, fontsize=11, fontweight='bold', pad=10)
+
+def _draw_shot_map(matches, team_name):
+    p, fig, ax = _make_pitch(half=True, figsize=(11, 7))
+    shots = []
+    for _, df in matches:
+        for _, row in df[(df['team_name'] == team_name) & (df['event'].isin(SHOT_EVENTS))].iterrows():
+            xy = _safe_xy(row)
+            if not xy:
+                continue
+            shots.append({'x': xy[0], 'y': xy[1], 'event': row['event'], 'player': row.get('player_name', '?') or '?'})
+
+    styles = {
+        'Goal': (GOLD, '*', 140, 'Goal'),
+        'Saved Shot': (GREEN, 'o', 64, 'Saved'),
+        'Post': (PURPLE, 'D', 64, 'Post'),
+        'Miss': ((1, 1, 1, 0.45), 'o', 48, 'Miss'),
+    }
+    for event, (color, marker, size, label) in styles.items():
+        pts = [s for s in shots if s['event'] == event]
+        if pts:
+            p.scatter([s['x'] for s in pts], [s['y'] for s in pts], ax=ax,
+                      color=color, s=size, marker=marker, alpha=0.9,
+                      edgecolors='white', linewidths=0.5, label=label)
+    _draw_pitch_title(ax, 'SHOT MAP')
+    _legend(ax)
+    return _fig_b64(fig), shots
+
+def _draw_goal_sequences(matches, team_name):
+    return _draw_goal_sequences_filtered(matches, team_name)
+
+def _goal_origin_label(goal_row, chain):
+    if _has_qualifier(goal_row, ['Penalty']) or goal_row.get('event') == 'Penalty':
+        return 'penalty'
+    if _has_qualifier(goal_row, ['From corner']):
+        return 'corner'
+    if _has_qualifier(goal_row, ['Free kick', 'Direct free']):
+        return 'free_kick'
+    if _has_qualifier(goal_row, ['Set piece']):
+        return 'set_piece'
+    if _has_qualifier(goal_row, ['Fast break']) or any(_has_qualifier(ev, ['Fast break']) for ev in chain):
+        return 'fast_break'
+    if any(_has_qualifier(ev, ['Cross']) for ev in chain):
+        return 'cross'
+    return 'open_play'
+
+def _draw_goal_sequences_filtered(matches, team_name, origin_filter='all', max_seconds=10):
+    goal_chains = []
+    for fname, df in matches:
+        match_info = _match_summary(fname, df, team_name)
+        match_label = f"vs {match_info['opponent']} ({match_info['score']})"
+        recs = _clean_records(df)
+        for i, row in enumerate(recs):
+            if row.get('team_name') != team_name or row.get('event') != 'Goal':
+                continue
+            t_goal = float(row.get('_abs_time', _event_seconds(row)))
+            chain = []
+            raw_chain = []
+            for prev in recs[max(0, i - 18):i + 1]:
+                if prev.get('team_name') != team_name:
+                    continue
+                if t_goal - float(prev.get('_abs_time', _event_seconds(prev))) > max_seconds:
+                    continue
+                raw_chain.append(prev)
+                xy = _safe_xy(prev)
+                if not xy:
+                    continue
+                chain.append({
+                    'x': xy[0], 'y': xy[1], 'event': prev.get('event'),
+                    'player': prev.get('player_name', '?') or '?',
+                })
+            if chain:
+                origin = _goal_origin_label(row, raw_chain)
+                if origin_filter not in (None, 'all') and origin != origin_filter:
+                    continue
+                goal_chains.append({'match': match_label, 'chain': chain[-8:], 'origin': origin})
+
+    if not goal_chains:
+        return None, []
+
+    p, fig, ax = _make_pitch(figsize=(11, 7))
+    colors = [GOLD, BLUE, GREEN, PURPLE]
+    for idx, item in enumerate(goal_chains[:4]):
+        chain = item['chain']
+        color = colors[idx % len(colors)]
+        for a, b in zip(chain, chain[1:]):
+            ax.annotate('', xy=(b['x'], b['y']), xytext=(a['x'], a['y']),
+                        arrowprops=dict(arrowstyle='->', color=color, lw=1.7, alpha=0.75),
+                        zorder=5)
+        p.scatter([c['x'] for c in chain[:-1]], [c['y'] for c in chain[:-1]], ax=ax,
+                  color=color, s=32, alpha=0.85, edgecolors='white', linewidths=0.3,
+                  label=None)
+        goal = chain[-1]
+        p.scatter([goal['x']], [goal['y']], ax=ax, color=GOLD, marker='*', s=150,
+                  edgecolors='white', linewidths=0.7)
+    _draw_pitch_title(ax, 'GOAL SEQUENCES')
+    return _fig_b64(fig), goal_chains
+
+def _estimate_def_block(team: pd.DataFrame, phase: str):
+    def_ev = team[team['event'].isin(DEF_EVENTS)].dropna(subset=['x', 'y'])
+    if phase == 'high':
+        phase_df = def_ev[def_ev['x'] >= 60]
+        fallback = (58, 36, 38)
+    elif phase == 'mid':
+        phase_df = def_ev[(def_ev['x'] >= 33.3) & (def_ev['x'] < 60)]
+        fallback = (38, 24, 40)
+    else:
+        phase_df = def_ev[def_ev['x'] < 33.3]
+        fallback = (16, 18, 36)
+    if len(phase_df) < 4:
+        return fallback
+    min_x, max_x = np.percentile(phase_df['x'], [15, 85])
+    min_y, max_y = np.percentile(phase_df['y'], [15, 85])
+    line_height = round(float(min_x))
+    team_length = round(float(max_x - min_x))
+    team_width = round(float((max_y - min_y) * 0.68))
+    return max(5, min(92, line_height)), max(10, min(55, team_length)), max(15, min(65, team_width))
+
+def _draw_defensive_phase_blocks(matches, team_name):
+    _, df = matches[0]
+    team = df[df['team_name'] == team_name]
+    fig, axes = plt.subplots(1, 3, figsize=(14, 8.5), facecolor=PITCH_BG)
+    panels = [
+        ('High Block / Press', 'high', BLUE),
+        ('Mid Block', 'mid', GOLD),
+        ('Low Block', 'low', RED),
+    ]
+    for ax, (title, phase, color) in zip(axes, panels):
+        p = MockPitch(pitch_color=PITCH_BG)
+        _, panel_ax = p.draw(figsize=(4.6, 7.0))
+        # Move the generated artists onto the target axis by redrawing directly.
+        plt.close(panel_ax.figure)
+        ax.set_facecolor(PITCH_BG)
+        for i in range(10):
+            ax.fill_between([0, 100], i * 10, i * 10 + 10,
+                            color='#18331b' if i % 2 == 0 else '#122615', alpha=0.9, zorder=0)
+        lc = (1.0, 1.0, 1.0, 0.42)
+        ax.plot([0, 100, 100, 0, 0], [0, 0, 100, 100, 0], color=lc, linewidth=1.3)
+        ax.plot([50, 50], [0, 100], color=lc, linewidth=1.3)
+        ax.add_patch(plt.Circle((50, 50), 9.15, color=lc, fill=False, linewidth=1.3))
+        ax.plot([0, 17, 17, 0], [21.1, 21.1, 78.9, 78.9], color=lc, linewidth=1.3)
+        ax.plot([100, 83, 83, 100], [21.1, 21.1, 78.9, 78.9], color=lc, linewidth=1.3)
+        lh, length, width = _estimate_def_block(team, phase)
+        y_min = 50 - (width / 0.68) / 2
+        y_max = 50 + (width / 0.68) / 2
+        rect = plt.Rectangle((lh, y_min), length, y_max - y_min,
+                             facecolor='#8fb0ff', alpha=0.34,
+                             edgecolor='#8fb0ff', linewidth=1.8, zorder=4)
+        ax.add_patch(rect)
+        ax.text(lh + length / 2, y_max + 5, f'{width}m', color='white', fontsize=8,
+                ha='center', va='center', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='#1f2937', edgecolor='none'), zorder=5)
+        ax.text(lh - 4, 50, f'{length}m', color='white', fontsize=8,
+                ha='center', va='center', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='#1f2937', edgecolor='none'), zorder=5)
+        ax.text(lh / 2, 10, f'{lh}m', color='white', fontsize=8,
+                ha='center', va='center', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='#1f2937', edgecolor='none'), zorder=5)
+        ax.text(96, 50, 'DIRECTION', color=(1, 1, 1, 0.35), fontsize=8,
+                rotation=90, ha='center', va='center', fontweight='bold')
+        ax.set_xlim(-2, 102)
+        ax.set_ylim(-3, 103)
+        ax.set_aspect('equal')
+        ax.axis('off')
+        ax.set_title(title.upper(), color=color, fontsize=12, fontweight='bold', pad=12)
+    plt.tight_layout()
+    return _fig_b64(fig)
+
+def _draw_transition_after_map(tr_data, mode='win'):
+    base_color = GREEN if mode == 'win' else RED
+    after_color = GOLD if mode == 'win' else ORANGE
+    outcome_colors = {
+        'goal': GOLD, 'shot': BLUE, 'f3': PURPLE, 'lost': RED, 'retained': GREEN,
+        'opp_goal': GOLD, 'opp_shot': RED, 'opp_f3': ORANGE, 'recovered': GREEN, 'survived': BLUE,
+    }
+    p, fig, ax = _make_pitch(figsize=(11, 7))
+    for c in tr_data['coords']:
+        p.scatter([c['x']], [c['y']], ax=ax,
+                  color=outcome_colors.get(c.get('outcome'), base_color),
+                  s=34, alpha=0.72, edgecolors='white', linewidths=0.25)
+    for a in tr_data.get('after', [])[:90]:
+        ax.annotate('', xy=(a['x1'], a['y1']), xytext=(a['x0'], a['y0']),
+                    arrowprops=dict(
+                        arrowstyle='->',
+                        color=outcome_colors.get(a.get('outcome'), after_color),
+                        lw=1.6,
+                        alpha=0.55,
+                    ),
+                    zorder=4)
+    if mode == 'win':
+        legend_items = [
+            ('goal', 'Goal'), ('shot', 'Shot'), ('f3', 'F3 entry'),
+            ('lost', 'Lost'), ('retained', 'Retained'),
+        ]
+    else:
+        legend_items = [
+            ('opp_goal', 'Opp goal'), ('opp_shot', 'Opp shot'), ('opp_f3', 'Opp F3'),
+            ('recovered', 'Recovered'), ('survived', 'Survived'),
+        ]
+    for key, label in legend_items:
+        ax.scatter([], [], color=outcome_colors[key], s=36, label=label)
+    _draw_pitch_title(ax, 'NEXT 10 SECONDS AFTER RECOVERY' if mode == 'win' else 'NEXT 10 SECONDS AFTER LOSS')
+    _legend(ax)
+    return _fig_b64(fig)
+
+
+def _draw_vulnerability_map(vul):
+    p, fig, ax = _make_pitch(half=True, figsize=(10.5, 7))
+
+    zones = [
+        ('Left', 0, 33.3, BLUE),
+        ('Center', 33.3, 66.6, GOLD),
+        ('Right', 66.6, 100, PURPLE),
+    ]
+    raw_counts = vul.get('entries_raw', {})
+    for name, y0, y1, color in zones:
+        ax.fill_between([50, 100], y0, y1, color=color, alpha=0.16, zorder=1)
+        ax.text(54, (y0 + y1) / 2, f"{raw_counts.get(name, 0)}",
+                color='white', fontsize=14, fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.35', facecolor='#1f2937',
+                          edgecolor='none', alpha=0.85),
+                zorder=8)
+
+    z14_rect = plt.Rectangle((66, 33.3), 17, 33.3, linewidth=1.8,
+                             edgecolor=RED, facecolor=RED, alpha=0.18, zorder=2)
+    ax.add_patch(z14_rect)
+    ax.text(74.5, 50, f"Z14\n{vul.get('z14_pg', 0)} / game",
+            color='white', fontsize=9, fontweight='bold',
+            ha='center', va='center',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='#991b1b',
+                      edgecolor='none', alpha=0.85),
+            zorder=9)
+
+    zone_colors = {'Left': BLUE, 'Center': GOLD, 'Right': PURPLE}
+    for entry in vul.get('entries_coords', [])[:55]:
+        color = zone_colors.get(entry.get('zone'), GOLD)
+        ax.annotate('', xy=(entry['end_x'], entry['end_y']), xytext=(entry['x'], entry['y']),
+                    arrowprops=dict(arrowstyle='->', color=color, lw=1.5, alpha=0.75),
+                    zorder=5)
+        ax.scatter([entry['end_x']], [entry['end_y']], color=color, s=30,
+                   edgecolors='white', linewidths=0.45, zorder=7)
+
+    _draw_pitch_title(ax, 'DEFENSIVE VULNERABILITY MAP', RED)
+    return _fig_b64(fig)
+
+def _outcome_bar(label, count, total, color):
+    pct = _safe_pct(count, total)
+    return html.Div(style={'marginBottom': '9px'}, children=[
+        html.Div(style={'display': 'flex', 'justifyContent': 'space-between', 'marginBottom': '3px'}, children=[
+            html.Span(label, style={'fontSize': '0.77rem', 'color': 'var(--text-secondary)'}),
+            html.Span(f'{count}  ·  {pct:.0f}%', style={'fontSize': '0.77rem', 'fontWeight': '700', 'color': color}),
+        ]),
+        html.Div(style={'height': '5px', 'background': 'rgba(255,255,255,0.07)', 'borderRadius': '3px'}, children=[
+            html.Div(style={'width': f'{pct}%', 'height': '100%', 'background': color, 'borderRadius': '3px'}),
+        ]),
+    ])
+
+def _compute_set_piece_details(matches, team_name):
+    data = {k: [] for k in ['corners', 'free_kicks', 'goal_kicks', 'penalties', 'shots']}
+    for _, df in matches:
+        team = df[df['team_name'] == team_name]
+        penalty_times = []
+        for _, row in _corner_events(team).iterrows():
+            start = _safe_xy(row)
+            end = _safe_xy(row, 'Pass End X', 'Pass End Y')
+            data['corners'].append({
+                'x': start[0] if start else None, 'y': start[1] if start else None,
+                'ex': end[0] if end else None, 'ey': end[1] if end else None,
+                'event': row.get('event'), 'player': row.get('player_name', '?') or '?',
+                'outcome': row.get('outcome'),
+            })
+
+        for _, row in _free_kick_events(team).iterrows():
+            start = _safe_xy(row)
+            end = _safe_xy(row, 'Pass End X', 'Pass End Y')
+            data['free_kicks'].append({
+                'x': start[0] if start else None, 'y': start[1] if start else None,
+                'ex': end[0] if end else None, 'ey': end[1] if end else None,
+                'event': row.get('event'), 'player': row.get('player_name', '?') or '?',
+                'outcome': row.get('outcome'),
+            })
+
+        for _, row in team.iterrows():
+            event = row.get('event')
+            type_id = row.get('type_id')
+            start = _safe_xy(row)
+            end = _safe_xy(row, 'Pass End X', 'Pass End Y')
+            rec = {
+                'x': start[0] if start else None, 'y': start[1] if start else None,
+                'ex': end[0] if end else None, 'ey': end[1] if end else None,
+                'event': event, 'player': row.get('player_name', '?') or '?',
+                'outcome': row.get('outcome'),
+                'goal_mouth_y': row.get(GOAL_MOUTH_Y_COL),
+                'goal_mouth_z': row.get(GOAL_MOUTH_Z_COL),
+            }
+            if _has_qualifier(row, ['Goal Kick']) or type_id == 124:
+                data['goal_kicks'].append(rec)
+            event_l = str(event).lower()
+            is_penalty_incident = (
+                (_has_qualifier(row, ['Penalty']) or event == 'Penalty')
+                and (
+                    event == 'Penalty'
+                    or event in SHOT_EVENTS
+                    or event in {'Save', 'Penalty faced'}
+                    or 'penalty' in event_l
+                )
+            )
+            if is_penalty_incident:
+                period = int(row.get('period_id') or 0)
+                minute = float(row.get('time_min') or 0)
+                duplicate = any(p == period and abs(minute - m) <= 5 for p, m in penalty_times)
+                if duplicate:
+                    continue
+                penalty_times.append((period, minute))
+                rec['x'], rec['y'] = 88.5, 50.0
+                data['penalties'].append(rec)
+            if event in SHOT_EVENTS and _has_qualifier(row, ['Set piece', 'From corner', 'Free kick', 'Penalty']):
+                data['shots'].append(rec)
+    return data
+
+def _draw_set_piece_map(records, title, color=GOLD, half=False, penalties=False):
+    p, fig, ax = _make_pitch(half=half, figsize=(11, 7))
+    completed = missed = 0
+    for rec in records:
+        if rec['x'] is None or rec['y'] is None:
+            continue
+        if penalties:
+            marker = '*' if rec['event'] == 'Goal' else 'o'
+            p.scatter([rec['x']], [rec['y']], ax=ax, color=color, marker=marker,
+                      s=120 if marker == '*' else 58, alpha=0.9, edgecolors='white', linewidths=0.6)
+            continue
+        if rec['ex'] is not None and rec['ey'] is not None:
+            is_complete = int(rec.get('outcome') or 0) == 1
+            completed += int(is_complete)
+            missed += int(not is_complete)
+            arrow_color = color if is_complete else (1, 1, 1, 0.35)
+            ax.annotate('', xy=(rec['ex'], rec['ey']), xytext=(rec['x'], rec['y']),
+                        arrowprops=dict(arrowstyle='->', color=arrow_color, lw=1.5, alpha=0.75),
+                        zorder=5)
+        p.scatter([rec['x']], [rec['y']], ax=ax, color=color, s=34, alpha=0.9, edgecolors='white', linewidths=0.4)
+    _draw_pitch_title(ax, title, color)
+    if not records:
+        ax.text(50, 50, 'No events recorded', color='white', alpha=0.65, fontsize=12,
+                ha='center', va='center', fontweight='bold')
+    if not penalties:
+        ax.scatter([], [], color=color, s=30, label=f'Completed {completed}')
+        ax.scatter([], [], color=(1, 1, 1, 0.45), s=30, label=f'Incomplete {missed}')
+        _legend(ax)
+    return _fig_b64(fig)
+
+
+def _goal_mouth_xy(rec):
+    mouth_y = _safe_float(rec.get('goal_mouth_y'))
+    mouth_z = _safe_float(rec.get('goal_mouth_z'))
+    if mouth_y is None:
+        return None
+    x = (mouth_y - GOAL_MOUTH_LEFT_OPT) / (GOAL_MOUTH_RIGHT_OPT - GOAL_MOUTH_LEFT_OPT)
+    y = (mouth_z or 0.0) / 38.0
+    return min(1.0, max(0.0, x)), min(1.0, max(0.0, y))
+
+
+def _draw_set_piece_goal_mouth(records, title='PENALTY GOAL MOUTH'):
+    placements = [rec for rec in records if _goal_mouth_xy(rec) is not None]
+    if not placements:
+        return None
+
+    fig, ax = plt.subplots(figsize=(10.5, 5.8), facecolor=PITCH_BG)
+    ax.set_facecolor('#101913')
+
+    ax.plot([0, 1], [0, 0], color='white', alpha=0.92, linewidth=3)
+    ax.plot([0, 0], [0, 1], color='white', alpha=0.92, linewidth=3)
+    ax.plot([1, 1], [0, 1], color='white', alpha=0.92, linewidth=3)
+    ax.plot([0, 1], [1, 1], color='white', alpha=0.92, linewidth=3)
+    for x in np.linspace(0.2, 0.8, 4):
+        ax.plot([x, x], [0, 1], color='white', alpha=0.12, linewidth=1)
+    for y in np.linspace(0.25, 0.75, 3):
+        ax.plot([0, 1], [y, y], color='white', alpha=0.12, linewidth=1)
+    ax.axvline(0.5, color=GOLD, alpha=0.25, linestyle='--', linewidth=1)
+
+    labels = {'Goal': 0, 'Saved Shot': 0, 'Miss / Post': 0}
+    for rec in placements:
+        x, y = _goal_mouth_xy(rec)
+        event = rec.get('event')
+        if event == 'Goal':
+            color, marker, label = GREEN, 'o', 'Goal'
+        elif event == 'Saved Shot':
+            color, marker, label = BLUE, 's', 'Saved Shot'
+        else:
+            color, marker, label = RED, 'X', 'Miss / Post'
+        labels[label] = labels.get(label, 0) + 1
+        ax.scatter([x], [y], s=210, color=color, marker=marker,
+                   edgecolors='white', linewidths=1.1, alpha=0.95, zorder=5,
+                   label=label)
+
+    ax.text(0.17, -0.08, 'LEFT', color=(1, 1, 1, 0.55), fontsize=8,
+            fontweight='bold', ha='center')
+    ax.text(0.50, -0.08, 'CENTRE', color=(1, 1, 1, 0.55), fontsize=8,
+            fontweight='bold', ha='center')
+    ax.text(0.83, -0.08, 'RIGHT', color=(1, 1, 1, 0.55), fontsize=8,
+            fontweight='bold', ha='center')
+
+    ax.set_title(title, color=GOLD, fontsize=12, fontweight='bold', pad=10)
+    handles, legend_labels = ax.get_legend_handles_labels()
+    unique = dict(zip(legend_labels, handles))
+    if unique:
+        legend = ax.legend(unique.values(), unique.keys(), loc='upper center',
+                           bbox_to_anchor=(0.5, -0.05), ncol=3, frameon=False,
+                           fontsize=8)
+        for text in legend.get_texts():
+            text.set_color('white')
+    ax.set_xlim(-0.18, 1.18)
+    ax.set_ylim(-0.18, 1.22)
+    ax.axis('off')
+    return _fig_b64(fig)
+
+def _mode_value(values, default=None):
+    vals = [v for v in values if pd.notna(v)]
+    if not vals:
+        return default
+    return pd.Series(vals).mode().iloc[0]
+
+def _format_formation(value):
+    if value is None or pd.isna(value):
+        return 'Unknown'
+    raw = str(int(value)) if isinstance(value, (int, float, np.integer, np.floating)) else str(value)
+    raw = raw.replace('-', '').strip()
+    if len(raw) >= 3 and raw.isdigit():
+        return '-'.join(raw)
+    return raw or 'Unknown'
+
+def _slot_coordinates(formation):
+    formation = _format_formation(formation).replace('-', '')
+    if formation == '4231':
+        return {
+            1: (8, 50), 2: (24, 82), 3: (24, 18), 4: (43, 58), 5: (24, 60), 6: (24, 40),
+            7: (66, 82), 8: (43, 42), 9: (86, 50), 10: (66, 50), 11: (66, 18),
+        }
+    if formation == '433':
+        return {
+            1: (8, 50), 2: (24, 82), 3: (24, 18), 4: (48, 50), 5: (24, 60), 6: (24, 40),
+            7: (78, 82), 8: (54, 66), 9: (86, 50), 10: (54, 34), 11: (78, 18),
+        }
+    if formation == '4141':
+        return {
+            1: (8, 50), 2: (24, 82), 3: (24, 18), 4: (42, 50), 5: (24, 60), 6: (24, 40),
+            7: (66, 82), 8: (66, 58), 9: (86, 50), 10: (66, 42), 11: (66, 18),
+        }
+    if formation == '442':
+        return {
+            1: (8, 50), 2: (24, 82), 3: (24, 18), 4: (48, 58), 5: (24, 60), 6: (24, 40),
+            7: (58, 82), 8: (48, 42), 9: (82, 58), 10: (82, 42), 11: (58, 18),
+        }
+    return {
+        1: (8, 50), 2: (24, 82), 3: (24, 18), 4: (46, 58), 5: (24, 60), 6: (24, 40),
+        7: (66, 82), 8: (46, 42), 9: (86, 50), 10: (66, 50), 11: (66, 18),
+    }
+
+def _position_coordinate(position, used_count):
+    base = {
+        'GK': (8, 50), 'RB': (24, 82), 'LB': (24, 18), 'CB': (24, 50),
+        'RWB': (34, 86), 'LWB': (34, 14), 'CDM': (43, 50), 'CM': (52, 50),
+        'CAM': (66, 50), 'RW': (70, 82), 'LW': (70, 18), 'CF': (86, 50), 'ST': (86, 50),
+    }
+    x, y = base.get(str(position), (52, 50))
+    offset = ((used_count % 3) - 1) * 10
+    if str(position) in {'CB', 'CDM', 'CM', 'CF', 'ST'}:
+        y += offset
+    return x, max(12, min(88, y))
+
+def _compute_probable_xi(matches, team_name):
+    players = {}
+    formations = []
+    n_matches = len(matches)
+
+    for match_idx, (_, df) in enumerate(matches):
+        team = df[df['team_name'] == team_name].dropna(subset=['player_name'])
+        if team.empty:
+            continue
+        if 'formation' in team.columns:
+            formations.extend(team['formation'].dropna().tolist())
+
+        match_counts = team['player_name'].value_counts()
+        match_players = match_counts.index.tolist()
+        gk_rows = team[team.get('position', pd.Series(dtype=str)) == 'GK']
+        if not gk_rows.empty:
+            gk = gk_rows['player_name'].value_counts().index[0]
+            ordered = [gk] + [p for p in match_players if p != gk]
+        else:
+            ordered = match_players
+
+        likely_xi = ordered[:11]
+        for name in likely_xi:
+            p_df = team[team['player_name'] == name]
+            info = players.setdefault(name, {
+                'name': name, 'apps': 0, 'actions': 0, 'recent_bonus': 0,
+                'positions': [], 'slots': [], 'jerseys': [],
+            })
+            info['apps'] += 1
+            info['actions'] += int(match_counts.get(name, 0))
+            info['recent_bonus'] += max(0, n_matches - match_idx)
+            if 'position' in p_df.columns:
+                info['positions'].extend(p_df['position'].dropna().tolist())
+            if 'Team Player Formation' in p_df.columns:
+                info['slots'].extend(p_df['Team Player Formation'].dropna().tolist())
+            if 'Jersey Number' in p_df.columns:
+                info['jerseys'].extend(p_df['Jersey Number'].dropna().tolist())
+
+    formation = _mode_value(formations, None)
+    coords = _slot_coordinates(formation)
+
+    candidates = []
+    for info in players.values():
+        slot = _mode_value(info['slots'], None)
+        try:
+            slot = int(slot) if slot is not None else None
+        except Exception:
+            slot = None
+        jersey = _mode_value(info['jerseys'], None)
+        try:
+            jersey = int(jersey) if jersey is not None else None
+        except Exception:
+            jersey = None
+        position = _mode_value(info['positions'], 'UNK')
+        score = info['apps'] * 1000 + info['recent_bonus'] * 25 + info['actions']
+        candidates.append({**info, 'slot': slot, 'jersey': jersey, 'position': position, 'score': score})
+
+    selected = []
+    used_names = set()
+    for slot in range(1, 12):
+        slot_candidates = [p for p in candidates if p['slot'] == slot and p['name'] not in used_names]
+        if not slot_candidates:
+            continue
+        pick = sorted(slot_candidates, key=lambda p: p['score'], reverse=True)[0]
+        selected.append(pick)
+        used_names.add(pick['name'])
+
+    for pick in sorted(candidates, key=lambda p: p['score'], reverse=True):
+        if len(selected) >= 11:
+            break
+        if pick['name'] not in used_names:
+            selected.append(pick)
+            used_names.add(pick['name'])
+
+    used_pos_counts = {}
+    for i, player in enumerate(selected[:11]):
+        if player['slot'] in coords:
+            x, y = coords[player['slot']]
+        else:
+            count = used_pos_counts.get(player['position'], 0)
+            x, y = _position_coordinate(player['position'], count)
+            used_pos_counts[player['position']] = count + 1
+        player['x'] = x
+        player['y'] = y
+        player['confidence'] = _safe_pct(player['apps'], max(n_matches, 1))
+
+    selected = sorted(selected[:11], key=lambda p: (p.get('x', 50), p.get('y', 50)))
+    return {
+        'formation': _format_formation(formation),
+        'players': selected,
+        'sample_matches': n_matches,
+    }
+
+def _short_player_name(name):
+    parts = str(name).split()
+    if len(parts) <= 1:
+        return str(name)
+    return f"{parts[0][0]}. {parts[-1]}"
+
+def _draw_probable_xi(xi_data, rival_label):
+    p, fig, ax = _make_pitch(figsize=(11, 7))
+    players = xi_data['players']
+    for player in players:
+        x, y = player['x'], player['y']
+        ax.scatter([x], [y], s=520, color='#111827', edgecolors=GOLD, linewidths=2.0, zorder=5)
+        label = str(player['jersey']) if player['jersey'] is not None else str(player.get('position', ''))
+        ax.text(x, y + 0.8, label, color='white', fontsize=9, fontweight='bold',
+                ha='center', va='center', zorder=6)
+        ax.text(x, y - 5.3, _short_player_name(player['name']), color='white', fontsize=7.5,
+                ha='center', va='top', fontweight='bold', zorder=6,
+                bbox=dict(boxstyle='round,pad=0.2', facecolor=(0, 0, 0, 0.45), edgecolor='none'))
+        ax.text(x, y + 6.0, str(player.get('position', '')), color=GOLD, fontsize=6.5,
+                ha='center', va='bottom', fontweight='bold', zorder=6)
+    _draw_pitch_title(ax, f'{rival_label.upper()} PROJECTED XI vs GÖZTEPE')
+    return _fig_b64(fig)
+
+def _build_projected_xi(matches, team_name, rival_label):
+    try:
+        xi = _compute_probable_xi(matches, team_name)
+        if not xi['players']:
+            return html.Div()
+        img = _draw_probable_xi(xi, rival_label)
+        rows = []
+        for p_info in xi['players']:
+            rows.append(html.Div(style={
+                'display': 'flex', 'justifyContent': 'space-between',
+                'padding': '5px 0', 'borderBottom': '1px solid rgba(255,255,255,0.05)',
+            }, children=[
+                html.Span(f"{p_info.get('position', 'UNK')} · {_short_player_name(p_info['name'])}", style={
+                    'fontSize': '0.74rem', 'color': 'var(--text-secondary)',
+                }),
+                html.Span(f"{p_info['confidence']}%", style={
+                    'fontSize': '0.74rem', 'fontWeight': '700', 'color': GOLD,
+                }),
+            ]))
+        return _card(
+            dbc.Row([
+                dbc.Col([
+                    html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
+                        _pill('Formation', xi['formation'], GOLD),
+                        _pill('Sample', f"{xi['sample_matches']} matches", BLUE),
+                        _pill('Purpose', 'vs Göztepe', GREEN),
+                    ]),
+                    html.Div('PROBABLE STARTERS', style={
+                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
+                        'letterSpacing': '1px', 'marginBottom': '8px',
+                    }),
+                    html.Div(rows),
+                    html.Div('Confidence = selected in recent sampled XIs, not confirmed team news.', style={
+                        'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
+                        'marginTop': '8px', 'lineHeight': '1.4',
+                    }),
+                ], md=4),
+                dbc.Col([
+                    html.Img(src=img, style={'width': '100%', 'borderRadius': '8px'}),
+                ], md=8),
+            ]),
+            title=f'{rival_label} — Projected XI Against Göztepe', icon='👥'
+        )
+    except Exception:
+        return html.Div()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -993,7 +1839,7 @@ def _label_badge(text, color):
 def _build_selected_match_card(fname, df, team_name, rival_label):
     """Rich summary card for the currently selected match."""
     s = _match_summary(fname, df, team_name)
-    res_colors = {'W': GREEN, 'D': GOLD, 'L': RED}
+    res_colors = {'W': GREEN, 'D': BLUE, 'L': RED}
     c = res_colors.get(s['result'], GOLD)
 
     # Extra stats for the single-match card
@@ -1051,386 +1897,30 @@ def _build_selected_match_card(fname, df, team_name, rival_label):
     ])
 
 
-# ════════════════════════════════════════════════════════════════
-# OFFENSIVE TAB
-# ════════════════════════════════════════════════════════════════
-
-def _build_offensive(matches, team_name, rival_label):
-    sections = []
-
-    # ── 1. Build-Up Style ──────────────────────────────────────
-    try:
-        bu = _compute_buildup(matches, team_name)
-        p, fig, ax = _make_pitch()
-        for c in bu['coords'][:600]:
-            color = RED if c['type'] == 'Long' else GOLD
-            p.scatter([c['x']], [c['y']], ax=ax, color=color, s=12, alpha=0.45)
-        ax.scatter([], [], color=GOLD, s=30, label='Short')
-        ax.scatter([], [], color=RED,  s=30, label='Long')
-        _legend(ax)
-        img = _fig_b64(fig)
-
-        sections.append(_card(
-            dbc.Row([
-                dbc.Col([
-                    html.Div('PASS TYPE', style={
-                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                        'letterSpacing': '1px', 'marginBottom': '8px',
-                    }),
-                    _bar('Short Pass', bu['short_pct'], GOLD),
-                    _bar('Long Ball',  bu['long_pct'],  RED),
-                    html.Div(style={'marginTop': '14px', 'marginBottom': '8px'}, children=[
-                        html.Div('BUILD-UP ZONE', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _bar('Left Channel',     bu['left_pct'],   BLUE),
-                        _bar('Central Corridor', bu['center_pct'], GOLD),
-                        _bar('Right Channel',    bu['right_pct'],  PURPLE),
-                    ]),
-                    html.Div(style={
-                        'background': 'rgba(255,255,255,0.03)', 'borderRadius': '10px',
-                        'padding': '10px', 'border': '1px solid var(--border-color)',
-                    }, children=[
-                        html.Div('TOP BUILD-UP PLAYERS', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _player_table(bu['top_builders'], color=GOLD),
-                    ]),
-                ], md=4),
-                dbc.Col([
-                    html.Img(src=img, style={'width': '100%', 'borderRadius': '8px'}),
-                    html.Div(style={'display': 'flex', 'gap': '20px', 'justifyContent': 'center', 'marginTop': '6px'}, children=[
-                        html.Span('● Short pass origins', style={'fontSize': '0.65rem', 'color': GOLD}),
-                        html.Span('● Long ball origins', style={'fontSize': '0.65rem', 'color': RED}),
-                    ]),
-                    html.Div(style={'marginTop': '14px', 'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap'}, children=[
-                        _pill('Passes / Game', bu['passes_per_game'], GOLD),
-                        _pill('GK Short %',    f"{bu['gk_short_pct']}%", BLUE),
-                    ]),
-                ], md=8),
-            ]),
-            title=f'{rival_label} — Build-Up Style', icon='⚽'
-        ))
-    except Exception:
-        pass
-
-    # ── 2. Final Third Entry ───────────────────────────────────
-    try:
-        f3 = _compute_final_third(matches, team_name)
-        p, fig, ax = _make_pitch(half=True)
-        METHOD_C = {'Short Pass': GOLD, 'Deep Pass': RED, 'Ball Carry': BLUE}
-        for e in f3['coords']:
-            c = METHOD_C.get(e['method'], GOLD)
-            p.scatter([e['x']], [e['y']], ax=ax, color=c, s=35, alpha=0.65, marker='D')
-        for label, c in METHOD_C.items():
-            ax.scatter([], [], color=c, s=40, marker='D', label=label)
-        _legend(ax)
-        img = _fig_b64(fig)
-
-        sections.append(_card(
-            dbc.Row([
-                dbc.Col([
-                    _pill('Entries / Game', f3['per_game'], GOLD),
-                    html.Div(style={'marginTop': '14px'}, children=[
-                        html.Div('ENTRY METHOD', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _bar('Short Pass',  f3['method']['Short Pass'],  GOLD),
-                        _bar('Deep Pass',   f3['method']['Deep Pass'],   RED),
-                        _bar('Ball Carry',  f3['method']['Ball Carry'],  BLUE),
-                    ]),
-                    html.Div(style={'marginTop': '14px'}, children=[
-                        html.Div('ENTRY ZONE', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _bar('Left',    f3['zone']['Left'],   BLUE),
-                        _bar('Central', f3['zone']['Center'], GOLD),
-                        _bar('Right',   f3['zone']['Right'],  PURPLE),
-                    ]),
-                    html.Div(style={'marginTop': '14px'}, children=[
-                        html.Div('AFTER ENTRY', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _bar('→ Cross',      f3['after']['cross'],  PURPLE),
-                        _bar('→ Shot',       f3['after']['shot'],   GREEN),
-                        _bar('→ Duel',       f3['after']['duel'],   ORANGE),
-                        _bar('→ Possession', f3['after']['pass'],   BLUE),
-                    ]),
-                ], md=5),
-                dbc.Col([
-                    html.Img(src=img, style={'width': '100%', 'borderRadius': '8px'}),
-                    html.Div('◆ Final third entry points by method', style={
-                        'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
-                        'textAlign': 'center', 'marginTop': '4px',
-                    }),
-                ], md=7),
-            ]),
-            title='Final Third Entry', icon='🎯'
-        ))
-    except Exception:
-        pass
-
-    # ── 3. 15-Second Outcomes ──────────────────────────────────
-    try:
-        out = _compute_15s_outcomes(matches, team_name)
-        sections.append(_card(
-            html.Div(style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap'}, children=[
-                _pill('→ F3 Entry',   f"{out['f3_entry']}%",   GOLD),
-                _pill('→ Shot',       f"{out['shot']}%",        BLUE),
-                _pill('→ On Target',  f"{out['on_target']}%",   GREEN),
-                _pill('→ Goal',       f"{out['goal']}%",        ORANGE),
-                _pill('→ Turnover',   f"{out['turnover']}%",    RED),
-            ]),
-            html.Div(f"Based on {out['total']} ball-win sequences from own half — 15-second window", style={
-                'fontSize': '0.68rem', 'color': 'var(--text-secondary)',
-                'marginTop': '10px', 'textAlign': 'center',
-            }),
-            title='15-Second Outcomes (from Ball Win)', icon='⏱'
-        ))
-    except Exception:
-        pass
-
-    # ── 4. Playmaker & Tempo ───────────────────────────────────
-    try:
-        pm = _compute_playmaker(matches, team_name)
-        sections.append(_card(
-            dbc.Row([
-                dbc.Col([
-                    html.Div(style={
-                        'background': 'rgba(251,191,36,0.08)',
-                        'border': '1px solid rgba(251,191,36,0.22)',
-                        'borderRadius': '12px', 'padding': '14px', 'marginBottom': '12px',
-                    }, children=[
-                        html.Div('🎖 KEY PLAYMAKER', style={
-                            'fontSize': '0.68rem', 'color': 'var(--text-secondary)',
-                            'textTransform': 'uppercase', 'letterSpacing': '1px', 'marginBottom': '6px',
-                        }),
-                        html.Div(pm['pm_name'], style={
-                            'fontSize': '1.05rem', 'fontWeight': '700', 'color': GOLD,
-                        }),
-                        html.Div(style={'display': 'flex', 'gap': '14px', 'marginTop': '6px'}, children=[
-                            html.Span(f"{pm['pm_total']} total passes", style={'fontSize': '0.72rem', 'color': 'var(--text-secondary)'}),
-                            html.Span(f"{pm['pm_prog']} progressive", style={'fontSize': '0.72rem', 'color': BLUE}),
-                        ]),
-                    ]),
-                    html.Div('TOP PROGRESSIVE PASSERS', style={
-                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                        'letterSpacing': '1px', 'marginBottom': '8px',
-                    }),
-                    _player_table(pm['top_progressive'], color=BLUE),
-                ], md=5),
-                dbc.Col([
-                    html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '12px'}, children=[
-                        _pill('Passes / Game',   pm['passes_per_game'], GOLD),
-                        _pill('Left FB Passes',  pm['fb_left_pg'],      BLUE),
-                        _pill('Right FB Passes', pm['fb_right_pg'],     BLUE),
-                    ]),
-                    html.Div('WINGER TOUCHES — WIDE FINAL THIRD', style={
-                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                        'letterSpacing': '1px', 'marginBottom': '8px',
-                    }),
-                    html.Div(style={'display': 'flex', 'gap': '8px'}, children=[
-                        _pill('Left Wing / Game',  pm['wing_left_pg'],  PURPLE),
-                        _pill('Right Wing / Game', pm['wing_right_pg'], PURPLE),
-                    ]),
-                    html.Div(style={
-                        'marginTop': '12px', 'fontSize': '0.68rem',
-                        'color': 'var(--text-secondary)', 'lineHeight': '1.5',
-                    }, children=[
-                        html.Span('⚠ Numerical superiority by zone & exact triangle formation detection require tracking data (not available from event logs).', ),
-                    ]),
-                ], md=7),
-            ]),
-            title='Playmaker, Tempo & Width', icon='🧠'
-        ))
-    except Exception:
-        pass
-
-    # ── 5. Zone 14 Control ─────────────────────────────────────
-    try:
-        z14 = _compute_z14(matches, team_name)
-        sections.append(_card(
-            html.Div(style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap'}, children=[
-                _pill('Z14 Passes / Game', z14['passes_pg'],   GOLD),
-                _pill('Z14 Shots / Game',  z14['shots_pg'],    BLUE),
-                _pill('Z14 Duels / Game',  z14['duels_pg'],    PURPLE),
-                _pill('Z14 Duel Win %',    f"{z14['duel_win']}%", GREEN),
-            ]),
-            html.Div('Zone 14 = central channel of the final third (x > 66, y 33–67)', style={
-                'fontSize': '0.67rem', 'color': 'var(--text-secondary)',
-                'marginTop': '8px', 'textAlign': 'center',
-            }),
-            title='Zone 14 Control', icon='🔑'
-        ))
-    except Exception:
-        pass
-
-    # ── 6. Cross Map ───────────────────────────────────────────
-    try:
-        cm = _compute_cross_map(matches, team_name)
-        coords = cm['coords']
-
-        if coords:
-            xs = [c['x'] for c in coords]
-            ys = [c['y'] for c in coords]
-
-            p, fig, ax = _make_pitch(figsize=(12, 7.5))
-
-            # Grid heatmap — bins=(6 x, 5 y)
-            stat = p.bin_statistic(xs, ys, statistic='count', bins=(6, 5))
-            p.heatmap(stat, ax=ax, cmap='YlOrRd', edgecolors=PITCH_BG,
-                      linewidth=2.5, alpha=0.72)
-            p.label_heatmap(stat, color='white', fontsize=13, ax=ax,
-                            ha='center', va='center', fontweight='bold',
-                            str_format='{:.0f}')
-
-            # Individual cross origins
-            succ = [c for c in coords if c['success']]
-            fail = [c for c in coords if not c['success']]
-            if succ:
-                p.scatter([c['x'] for c in succ], [c['y'] for c in succ],
-                          ax=ax, color=GREEN, s=50, alpha=0.85,
-                          zorder=6, marker='^', label='Successful cross')
-            if fail:
-                p.scatter([c['x'] for c in fail], [c['y'] for c in fail],
-                          ax=ax, color=RED, s=30, alpha=0.55,
-                          zorder=6, marker='x', label='Failed cross')
-            _legend(ax)
-
-            cross_img = _fig_b64(fig)
-
-            sections.append(_card(
-                dbc.Row([
-                    dbc.Col([
-                        html.Div(style={
-                            'display': 'flex', 'gap': '8px',
-                            'flexWrap': 'wrap', 'marginBottom': '16px',
-                        }, children=[
-                            _pill('Total Crosses',  cm['total'],                 GOLD),
-                            _pill('Per Match',      cm['per_game'],              BLUE),
-                            _pill('Success %',      f"{cm['success_pct']}%",     GREEN),
-                        ]),
-                        html.Div('CROSS ORIGIN ZONE', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '10px',
-                        }),
-                        _bar('Left Flank — Deep (byline)',  cm['zones']['Left Flank (deep)'],  BLUE),
-                        _bar('Left Flank — Wide',           cm['zones']['Left Flank (wide)'],  BLUE),
-                        _bar('Right Flank — Wide',          cm['zones']['Right Flank (wide)'], PURPLE),
-                        _bar('Right Flank — Deep (byline)', cm['zones']['Right Flank (deep)'], PURPLE),
-                        _bar('Central Corridor',            cm['zones']['Central'],            GOLD),
-                        html.Div(style={
-                            'marginTop': '14px',
-                            'background': 'rgba(255,255,255,0.03)',
-                            'borderRadius': '10px', 'padding': '12px',
-                            'border': '1px solid var(--border-color)',
-                            'fontSize': '0.68rem', 'color': 'var(--text-secondary)',
-                            'lineHeight': '1.6',
-                        }, children=[
-                            html.Strong('Raw counts per zone:', style={'color': GOLD, 'display': 'block', 'marginBottom': '5px'}),
-                        ] + [
-                            html.Div(f"{k}: {v}", style={'marginBottom': '2px'})
-                            for k, v in cm['zones_raw'].items() if v > 0
-                        ]),
-                    ], md=4),
-                    dbc.Col([
-                        html.Img(src=cross_img, style={'width': '100%', 'borderRadius': '8px'}),
-                        html.Div(style={
-                            'display': 'flex', 'gap': '20px',
-                            'justifyContent': 'center', 'marginTop': '6px',
-                        }, children=[
-                            html.Span('▲ Successful cross', style={'fontSize': '0.65rem', 'color': GREEN}),
-                            html.Span('✕ Failed cross',     style={'fontSize': '0.65rem', 'color': RED}),
-                            html.Span('■ Cell count',       style={'fontSize': '0.65rem', 'color': GOLD}),
-                        ]),
-                    ], md=8),
-                ]),
-                title=f'{rival_label} — Cross Map & Origin Zones', icon='🎯'
-            ))
-    except Exception:
-        pass
-
-    # ── 7. Shot Origin / xG Chain (kept for reference) ──────────
-    try:
-        so = _compute_shot_origin(matches, team_name)
-        sections.append(_card(
-            dbc.Row([
-                dbc.Col([
-                    html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
-                        _pill('Shots / Game',  so['total_pg'],             GOLD),
-                        _pill('On Target %',   f"{so['on_target_pct']}%",  GREEN),
-                        _pill('Goals / Game',  so['goals_pg'],             ORANGE),
-                        _pill('Header %',      f"{so['header_pct']}%",     BLUE),
-                    ]),
-                    html.Div('SHOT ORIGIN (xG Chain Source)', style={
-                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                        'letterSpacing': '1px', 'marginBottom': '8px',
-                    }),
-                    _bar('Open Play / Frontal',  so['origins']['open_play'],   GOLD),
-                    _bar('From Cross',            so['origins']['cross'],        BLUE),
-                    _bar('Set Piece',             so['origins']['set_piece'],    RED),
-                    _bar('Fast Break',            so['origins']['fast_break'],   PURPLE),
-                    html.Div(style={'marginTop': '12px'}, children=[
-                        html.Div('SHOT ZONE', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _bar('Small Box (6-yd)',  so['zones']['small_box'],   GREEN),
-                        _bar('Inside Box',        so['zones']['inside_box'],  GOLD),
-                        _bar('Outside Box',       so['zones']['outside_box'], RED),
-                    ]),
-                ], md=5),
-                dbc.Col([
-                    # Shot map
-                    (lambda: (
-                        lambda coords: (
-                            lambda p, fig, ax: (
-                                [p.scatter([c['x']], [c['y']], ax=ax,
-                                           color=({'Goal': GOLD, 'Saved Shot': GREEN,
-                                                   'Post': PURPLE}.get(c['event'], (1,1,1,0.25))),
-                                           s=55, alpha=0.8, marker='*') for c in coords],
-                                _legend(ax),
-                                html.Img(src=_fig_b64(fig), style={'width': '100%', 'borderRadius': '8px'})
-                            )[-1]
-                        )(*_make_pitch(half=True))
-                    )(so['coords'])
-                    )() if so['coords'] else html.Div(),
-                    html.Div('★ Goal  ● On Target  ○ Off Target', style={
-                        'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
-                        'textAlign': 'center', 'marginTop': '4px',
-                    }),
-                    html.Div(style={'marginTop': '12px'}, children=[
-                        html.Div('TOP FINISHERS', style={
-                            'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                            'letterSpacing': '1px', 'marginBottom': '8px',
-                        }),
-                        _player_table(so['finishers'], color=ORANGE),
-                    ]) if so['finishers'] else html.Div(),
-                    html.Div('⚠ xGOT and xG values require a trained model — not available from raw event data.',
-                             style={'fontSize': '0.65rem', 'color': 'var(--text-secondary)', 'marginTop': '8px'}),
-                ], md=7),
-            ]),
-            title='Shot Profile & xG Chain Origin', icon='🔫'
-        ))
-    except Exception:
-        pass
-
-    return html.Div(sections) if sections else html.Div(className='goz-form-section', children=[
-        html.Div('No offensive data available.', className='goz-card-desc')
-    ])
-
-
-# ════════════════════════════════════════════════════════════════
-# DEFENSIVE TAB
-# ════════════════════════════════════════════════════════════════
-
 def _build_defensive(matches, team_name, rival_label):
     sections = []
+
+    # ── 0. Defensive Phase Blocks ─────────────────────────────
+    try:
+        block_img = _draw_defensive_phase_blocks(matches, team_name)
+        df_m = _compute_defensive(matches, team_name)
+        sections.append(_card(
+            html.Div(children=[
+                html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
+                    _pill('Avg Def. Line', df_m['avg_line'], BLUE),
+                    _pill('PPDA', df_m['ppda'], PURPLE),
+                    _pill('Block Type', df_m['press_label'], GOLD),
+                ]),
+                html.Img(src=block_img, style={'width': '100%', 'borderRadius': '8px'}),
+                html.Div('Estimated from defensive actions in high, mid, and low zones for the selected match.', style={
+                    'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
+                    'textAlign': 'center', 'marginTop': '6px',
+                }),
+            ]),
+            title=f'{rival_label} — Defensive Phase Blocks', icon='🛡'
+        ))
+    except Exception:
+        pass
 
     # ── 1. Defensive Shape & Pressing ─────────────────────────
     try:
@@ -1499,49 +1989,18 @@ def _build_defensive(matches, team_name, rival_label):
     except Exception:
         pass
 
-    # ── 2. Duels — Aerial & Ground ─────────────────────────────
-    try:
-        ae = _compute_aerials(matches, team_name)
-        sections.append(_card(
-            dbc.Row([
-                dbc.Col([
-                    html.Div('AERIAL DUELS', style={
-                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                        'letterSpacing': '1px', 'marginBottom': '8px',
-                    }),
-                    html.Div(style={'display': 'flex', 'gap': '8px', 'marginBottom': '12px'}, children=[
-                        _pill('Win %',      f"{ae['aerial_win']}%",  GREEN),
-                        _pill('Per Game',   ae['aerial_pg'],          GOLD),
-                    ]),
-                    _bar('Aerial Win Rate',      ae['aerial_win'],     GREEN),
-                    _bar('Box Aerial Win Rate',  ae['box_aerial_win'], ORANGE),
-                    html.Div(f"Total box aerials in sample: {ae['box_aerial_tot']}", style={
-                        'fontSize': '0.68rem', 'color': 'var(--text-secondary)', 'marginTop': '6px',
-                    }),
-                ], md=6),
-                dbc.Col([
-                    html.Div('GROUND DUELS (Challenge + Tackle)', style={
-                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                        'letterSpacing': '1px', 'marginBottom': '8px',
-                    }),
-                    html.Div(style={'display': 'flex', 'gap': '8px', 'marginBottom': '12px'}, children=[
-                        _pill('Win %',    f"{ae['ground_win']}%", GREEN),
-                        _pill('Per Game', ae['ground_pg'],         GOLD),
-                    ]),
-                    _bar('Ground Duel Win Rate', ae['ground_win'], GREEN),
-                ], md=6),
-            ]),
-            title='Duel Profile — Aerial vs Ground', icon='💪'
-        ))
-    except Exception:
-        pass
-
-    # ── 3. Vulnerable Flanks & Offside ────────────────────────
+    # ── 2. Vulnerable Flanks & Offside ────────────────────────
     try:
         vul = _compute_vulnerability(matches, team_name)
+        vul_img = _draw_vulnerability_map(vul)
         sections.append(_card(
             dbc.Row([
                 dbc.Col([
+                    html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
+                        _pill('F3 Entries / Game', vul['f3_pg'], RED),
+                        _pill('Z14 Passes / Game', vul['z14_pg'], GOLD),
+                        _pill('Offside Traps / Game', vul['offside_pg'], GREEN),
+                    ]),
                     html.Div('F3 ENTRIES CONCEDED BY FLANK', style={
                         'fontSize': '0.7rem', 'fontWeight': '700', 'color': RED,
                         'letterSpacing': '1px', 'marginBottom': '8px',
@@ -1549,45 +2008,23 @@ def _build_defensive(matches, team_name, rival_label):
                     _bar('Left Channel', vul['f3_conceded']['Left'],   BLUE),
                     _bar('Central',      vul['f3_conceded']['Center'], GOLD),
                     _bar('Right Channel',vul['f3_conceded']['Right'],  PURPLE),
-                    html.Div(f"F3 entries conceded / game: {vul['f3_pg']}", style={
-                        'fontSize': '0.68rem', 'color': 'var(--text-secondary)', 'marginTop': '8px',
-                    }),
-                ], md=6),
-                dbc.Col([
-                    html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap'}, children=[
-                        _pill('Z14 Passes Conceded / Game', vul['z14_pg'],     RED),
-                        _pill('Offside Traps / Game',        vul['offside_pg'], GREEN),
-                    ]),
                     html.Div(style={
                         'marginTop': '12px', 'fontSize': '0.68rem',
                         'color': 'var(--text-secondary)', 'lineHeight': '1.5',
                     }, children=[
-                        html.P('Offside trap count = Offside Provoked events.'),
-                        html.P('High Z14 passes conceded → vulnerable in central corridor.'),
+                        html.P('Arrows show opponent passes entering the final third.'),
+                        html.P('Red central box marks Zone 14 passes conceded.'),
                     ]),
-                ], md=6),
+                ], md=4),
+                dbc.Col([
+                    html.Img(src=vul_img, style={'width': '100%', 'maxHeight': '470px', 'objectFit': 'contain', 'borderRadius': '8px'}),
+                    html.Div('Blue = left channel · Yellow = central · Purple = right channel', style={
+                        'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
+                        'textAlign': 'center', 'marginTop': '4px',
+                    }),
+                ], md=8),
             ]),
-            title='Vulnerable Flanks & Zone 14 Control', icon='⚠'
-        ))
-    except Exception:
-        pass
-
-    # ── 4. Pre-Goal Structure (Golden 30s) ─────────────────────
-    try:
-        pg = _compute_pre_goal(matches, team_name)
-        sections.append(_card(
-            html.Div(style={'display': 'flex', 'gap': '10px', 'flexWrap': 'wrap'}, children=[
-                _pill('Goals Conceded',            pg['goals_conceded'],   RED),
-                _pill('Goals / Game',              pg['goals_pg'],          RED),
-                _pill('Avg Def Acts (30s)',         pg['avg_def_acts'],      GOLD),
-                _pill('Avg Opp Passes (30s)',       pg['avg_opp_pas'],       BLUE),
-                _pill('Failed Clearances (30s)',    pg['avg_fc'],            ORANGE),
-            ]),
-            html.Div('Average values in the 30 seconds before each goal conceded', style={
-                'fontSize': '0.68rem', 'color': 'var(--text-secondary)',
-                'marginTop': '10px', 'textAlign': 'center',
-            }),
-            title='Pre-Goal Structure — Golden 30s Window', icon='🥅'
+            title='Defensive Vulnerability Map', icon='⚠'
         ))
     except Exception:
         pass
@@ -1597,35 +2034,36 @@ def _build_defensive(matches, team_name, rival_label):
     ])
 
 
-# ════════════════════════════════════════════════════════════════
-# TRANSITIONS TAB
-# ════════════════════════════════════════════════════════════════
-
 def _build_off_transitions(matches, team_name, rival_label):
     sections = []
     try:
         tr = _compute_transitions(matches, team_name)
 
         # ── Ball Wins (Attacking Transitions) ─────────────────
-        p_w, fig_w, ax_w = _make_pitch()
-        for c in tr['win']['coords']:
-            p_w.scatter([c['x']], [c['y']], ax=ax_w, color=GREEN, s=18, alpha=0.5)
-        ax_w.scatter([], [], color=GREEN, s=30, label='Ball Recovery')
-        _legend(ax_w)
-        img_w = _fig_b64(fig_w)
+        img_w = _draw_transition_after_map(tr['win'], mode='win')
 
         sections.append(_card(
             dbc.Row([
                 dbc.Col([
                     html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
-                        _pill('Ball Wins / Game', tr['win']['per_game'], GREEN),
-                        _pill('→ F3 Entry %',     f"{tr['win']['outcomes']['f3']}%",      GOLD),
-                        _pill('→ Shot %',         f"{tr['win']['outcomes']['shot']}%",    BLUE),
-                        _pill('→ Opp Shot %',     f"{tr['win']['outcomes']['opp_shot']}%", RED),
+                        _pill('Ball Wins', tr['win']['total'], GREEN),
+                        _pill('10s → F3 %',       f"{tr['win']['outcomes']['f3']}%",   GOLD),
+                        _pill('10s → Shot %',     f"{tr['win']['outcomes']['shot']}%", BLUE),
+                        _pill('10s → Goal %',     f"{tr['win']['outcomes']['goal']}%", GREEN),
+                        _pill('10s → Lost %',     f"{tr['win']['outcomes']['lost']}%", RED),
                     ]),
-                    html.Div('RECOVERY ZONE', style={
+                    html.Div('WHAT HAPPENED AFTER 10 SECONDS', style={
                         'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
                         'letterSpacing': '1px', 'marginBottom': '8px',
+                    }),
+                    _outcome_bar('Goal', tr['win']['outcome_counts']['goal'], tr['win']['total'], GOLD),
+                    _outcome_bar('Shot', tr['win']['outcome_counts']['shot'], tr['win']['total'], BLUE),
+                    _outcome_bar('Final third entry', tr['win']['outcome_counts']['f3'], tr['win']['total'], PURPLE),
+                    _outcome_bar('Lost again', tr['win']['outcome_counts']['lost'], tr['win']['total'], RED),
+                    _outcome_bar('Retained / no danger', tr['win']['outcome_counts']['retained'], tr['win']['total'], GREEN),
+                    html.Div('RECOVERY ZONE', style={
+                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
+                        'letterSpacing': '1px', 'marginBottom': '8px', 'marginTop': '14px',
                     }),
                     _bar('Defensive 3rd', tr['win']['zones']['Defensive 3rd'], RED),
                     _bar('Middle 3rd',    tr['win']['zones']['Middle 3rd'],    GOLD),
@@ -1640,7 +2078,7 @@ def _build_off_transitions(matches, team_name, rival_label):
                 ], md=5),
                 dbc.Col([
                     html.Img(src=img_w, style={'width': '100%', 'borderRadius': '8px'}),
-                    html.Div('● Ball recovery locations', style={
+                    html.Div('● Recovery point · arrows show the next actions within 10 seconds', style={
                         'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
                         'textAlign': 'center', 'marginTop': '4px',
                     }),
@@ -1663,25 +2101,30 @@ def _build_def_transitions(matches, team_name, rival_label):
         tr = _compute_transitions(matches, team_name)
 
         # ── Ball Losses (Defensive Transitions) ───────────────
-        p_l, fig_l, ax_l = _make_pitch()
-        for c in tr['loss']['coords']:
-            p_l.scatter([c['x']], [c['y']], ax=ax_l, color=RED, s=18, alpha=0.5)
-        ax_l.scatter([], [], color=RED, s=30, label='Ball Loss')
-        _legend(ax_l)
-        img_l = _fig_b64(fig_l)
+        img_l = _draw_transition_after_map(tr['loss'], mode='loss')
 
         sections.append(_card(
             dbc.Row([
                 dbc.Col([
                     html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
-                        _pill('Ball Losses / Game', tr['loss']['per_game'],                    RED),
-                        _pill('→ Opp F3 %',         f"{tr['loss']['outcomes']['opp_f3']}%",    ORANGE),
-                        _pill('→ Opp Shot %',        f"{tr['loss']['outcomes']['opp_shot']}%",  RED),
-                        _pill('→ Recovered %',       f"{tr['loss']['outcomes']['recovered']}%", GREEN),
+                        _pill('Ball Losses', tr['loss']['total'],                              RED),
+                        _pill('10s → Opp F3 %',     f"{tr['loss']['outcomes']['opp_f3']}%",    ORANGE),
+                        _pill('10s → Opp Shot %',   f"{tr['loss']['outcomes']['opp_shot']}%",  RED),
+                        _pill('10s → Opp Goal %',   f"{tr['loss']['outcomes']['opp_goal']}%",  GOLD),
+                        _pill('10s → Recovered %',  f"{tr['loss']['outcomes']['recovered']}%", GREEN),
                     ]),
-                    html.Div('BALL LOSS ZONE', style={
+                    html.Div('WHAT HAPPENED AFTER 10 SECONDS', style={
                         'fontSize': '0.7rem', 'fontWeight': '700', 'color': RED,
                         'letterSpacing': '1px', 'marginBottom': '8px',
+                    }),
+                    _outcome_bar('Opponent goal', tr['loss']['outcome_counts']['opp_goal'], tr['loss']['total'], GOLD),
+                    _outcome_bar('Opponent shot', tr['loss']['outcome_counts']['opp_shot'], tr['loss']['total'], RED),
+                    _outcome_bar('Opponent final third entry', tr['loss']['outcome_counts']['opp_f3'], tr['loss']['total'], ORANGE),
+                    _outcome_bar('Recovered back', tr['loss']['outcome_counts']['recovered'], tr['loss']['total'], GREEN),
+                    _outcome_bar('Survived / no danger', tr['loss']['outcome_counts']['survived'], tr['loss']['total'], BLUE),
+                    html.Div('BALL LOSS ZONE', style={
+                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': RED,
+                        'letterSpacing': '1px', 'marginBottom': '8px', 'marginTop': '14px',
                     }),
                     _bar('Defensive 3rd', tr['loss']['zones']['Defensive 3rd'], RED),
                     _bar('Middle 3rd',    tr['loss']['zones']['Middle 3rd'],    GOLD),
@@ -1696,7 +2139,7 @@ def _build_def_transitions(matches, team_name, rival_label):
                 ], md=5),
                 dbc.Col([
                     html.Img(src=img_l, style={'width': '100%', 'borderRadius': '8px'}),
-                    html.Div('● Ball loss locations', style={
+                    html.Div('● Loss point · arrows show opponent actions within 10 seconds', style={
                         'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
                         'textAlign': 'center', 'marginTop': '4px',
                     }),
@@ -1716,56 +2159,66 @@ def _build_def_transitions(matches, team_name, rival_label):
 def _build_set_pieces(matches, team_name, rival_label):
     sections = []
     try:
-        sp = _compute_set_pieces(matches, team_name)
+        details = _compute_set_piece_details(matches, team_name)
 
-        # Plot Set Piece Shot Map
-        p, fig, ax = _make_pitch(half=True, figsize=(11, 7))
-
-        coords = sp['coords']
-        if coords:
-            for ev, color, marker, label in [
-                ('Goal', GOLD, '*', 'Goal'),
-                ('Saved Shot', GREEN, 'o', 'On Target'),
-                ('Miss', (1, 1, 1, 0.3), 'o', 'Off Target'),
-                ('Post', PURPLE, 'D', 'Post')
-            ]:
-                pts = [c for c in coords if c['event'] == ev]
-                if pts:
-                    p.scatter([c['x'] for c in pts], [c['y'] for c in pts],
-                              ax=ax, color=color, s=50, alpha=0.85,
-                              marker=marker, label=label,
-                              edgecolors=(1,1,1,0.1), linewidths=0.4)
-            _legend(ax)
-        img_b64 = _fig_b64(fig)
+        set_piece_cards = [
+            ('Corners', 'corners', GOLD, True, False),
+            ('Dangerous Free Kicks', 'free_kicks', BLUE, True, False),
+            ('Goal Kicks', 'goal_kicks', GREEN, False, False),
+            ('Penalties', 'penalties', RED, True, True),
+        ]
+        maps = []
+        for title, key, color, half, penalties in set_piece_cards:
+            img = _draw_set_piece_map(details[key], title.upper(), color=color, half=half, penalties=penalties)
+            maps.append(dbc.Col([
+                html.Img(src=img, style={'width': '100%', 'borderRadius': '8px'}),
+                html.Div(f"{len(details[key])} {title.lower()} recorded", style={
+                    'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
+                    'textAlign': 'center', 'marginTop': '4px',
+                }),
+            ], md=6, style={'marginBottom': '14px'}))
 
         sections.append(_card(
-            dbc.Row([
-                dbc.Col([
-                    html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
-                        _pill('Corners / Game', sp['corners_pg'], GOLD),
-                        _pill('FKs / Game', sp['fks_pg'], BLUE),
-                        _pill('Penalties', sp['penalties'], RED),
-                        _pill('SP Goals', sp['sp_goals'], GREEN),
-                    ]),
-                    html.Div('SET PIECE METRICS', style={
-                        'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
-                        'letterSpacing': '1px', 'marginBottom': '8px',
-                    }),
-                    _bar('Corners / Game', sp['corners_pg'], GOLD),
-                    _bar('Free Kicks / Game', sp['fks_pg'], BLUE),
-                    _bar('Set Piece Shots / Game', sp['sp_shots_pg'], PURPLE),
-                    _bar('Set Piece Goals', sp['sp_goals'], GREEN),
-                ], md=5),
-                dbc.Col([
-                    html.Img(src=img_b64, style={'width': '100%', 'borderRadius': '8px'}),
-                    html.Div('★ Goal  ● On Target  ○ Off Target  ◆ Post', style={
-                        'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
-                        'textAlign': 'center', 'marginTop': '4px',
-                    }),
-                ], md=7),
+            html.Div(children=[
+                html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
+                    _pill('Corners', len(details['corners']), GOLD),
+                    _pill('Dangerous FKs', len(details['free_kicks']), BLUE),
+                    _pill('Goal Kicks', len(details['goal_kicks']), GREEN),
+                    _pill('Penalties', len(details['penalties']), RED),
+                ]),
+                dbc.Row(maps),
             ]),
-            title=f'{rival_label} — Set Piece Threat & Shots', icon='🎯'
+            title='Set Piece Delivery Maps', icon='📍'
         ))
+
+        penalty_goal_mouth = _draw_set_piece_goal_mouth(details['penalties'])
+        penalties_with_placement = [
+            p for p in details['penalties']
+            if _goal_mouth_xy(p) is not None
+        ]
+        penalty_goals = len([p for p in details['penalties'] if p.get('event') == 'Goal'])
+        penalty_saved = len([p for p in details['penalties'] if p.get('event') == 'Saved Shot'])
+        penalty_missed = len([p for p in details['penalties'] if p.get('event') in {'Miss', 'Post'}])
+        if penalty_goal_mouth:
+            sections.append(_card(
+                dbc.Row([
+                    dbc.Col([
+                        html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
+                            _pill('Penalties', len(details['penalties']), RED),
+                            _pill('With Placement', len(penalties_with_placement), GOLD),
+                            _pill('Scored', penalty_goals, GREEN),
+                            _pill('Saved', penalty_saved, BLUE),
+                            _pill('Miss/Post', penalty_missed, RED),
+                        ]),
+                        html.Div('Shows only penalty placement in the goal mouth when Opta goal-mouth coordinates exist.',
+                                 style={'fontSize': '0.72rem', 'color': 'var(--text-secondary)', 'lineHeight': '1.5'}),
+                    ], md=4),
+                    dbc.Col([
+                        html.Img(src=penalty_goal_mouth, style={'width': '100%', 'maxHeight': '420px', 'objectFit': 'contain', 'borderRadius': '8px'}),
+                    ], md=8),
+                ]),
+                title='Penalty Goal Mouth', icon='🥅'
+            ))
     except Exception:
         pass
 
@@ -1783,6 +2236,7 @@ def layout():
     default_value = next(iter(rivals.values()), None)
     rival_options = [{'label': label, 'value': value} for label, value in rivals.items()]
     tab_options   = [
+        {'label': '👥  Projected XI',     'value': 'projected-xi'},
         {'label': '⚔️  Offensive',        'value': 'off'},
         {'label': '🛡  Defensive',         'value': 'def'},
         {'label': '⚡  Off. Transitions',  'value': 'off-trans'},
@@ -1817,7 +2271,16 @@ def layout():
             html.Div(style={'margin': '28px 0 16px'}, children=[
                 html.Label('SELECT MATCH', className='goz-label',
                            style={'marginBottom': '10px', 'display': 'block'}),
-                html.Div(id='scout-match-selector-container'),
+                dbc.RadioItems(
+                    id='scout-match-selector',
+                    options=[],
+                    value=None,
+                    inline=True,
+                    className='pm-tab-radio-group',
+                    inputClassName='pm-tab-radio-input',
+                    labelClassName='pm-tab-radio-label',
+                    style={'gap': '10px'},
+                ),
             ]),
 
             # ── Selected match summary card ───────────────────
@@ -1854,17 +2317,18 @@ def layout():
 # ════════════════════════════════════════════════════════════════
 
 @callback(
-    Output('scout-match-selector-container', 'children'),
+    [Output('scout-match-selector', 'options'),
+     Output('scout-match-selector', 'value')],
     Input('scout-rival-selector', 'value'),
 )
 def update_match_options(rival_label):
     """Populate the match selector whenever the rival changes."""
     team_name = rival_label or ''
     if not team_name:
-        return html.Div()
+        return [], None
 
     matches = _load_rival_matches(team_name)
-    res_colors = {'W': GREEN, 'D': GOLD, 'L': RED}
+    res_colors = {'W': GREEN, 'D': BLUE, 'L': RED}
 
     options = []
     for fname, df in matches:
@@ -1886,16 +2350,7 @@ def update_match_options(rival_label):
 
     default = options[0]['value'] if options else None
 
-    return dbc.RadioItems(
-        id='scout-match-selector',
-        options=options,
-        value=default,
-        inline=True,
-        className='pm-tab-radio-group',
-        inputClassName='pm-tab-radio-input',
-        labelClassName='pm-tab-radio-label',
-        style={'gap': '10px'},
-    )
+    return options, default
 
 
 @callback(
@@ -1925,7 +2380,8 @@ def update_scout_content(rival_label, selected_file, active_tab):
     rival_display = _short(team_name)
     match_card = _build_selected_match_card(fname, df, team_name, rival_display)
 
-    if   active_tab == 'off':        content = _build_offensive(single, team_name, rival_display)
+    if   active_tab == 'projected-xi': content = _build_projected_xi(all_matches, team_name, rival_display)
+    elif active_tab == 'off':        content = _build_offensive(single, team_name, rival_display)
     elif active_tab == 'def':        content = _build_defensive(single, team_name, rival_display)
     elif active_tab == 'off-trans':  content = _build_off_transitions(single, team_name, rival_display)
     elif active_tab == 'def-trans':  content = _build_def_transitions(single, team_name, rival_display)

@@ -537,7 +537,7 @@ def detect_counter_attacks(df):
 def get_set_pieces(df, team_name):
     """
     Extracts set piece events for a team.
-    Returns dictionary with 'corners' and 'free_kicks'.
+    Returns dictionary with 'corners', 'free_kicks', and 'penalties'.
     """
     df_team = df[df['team_name'] == team_name].copy()
     
@@ -550,6 +550,7 @@ def get_set_pieces(df, team_name):
     
     corners = pd.DataFrame()
     free_kicks = pd.DataFrame()
+    penalties = pd.DataFrame()
     
 
     if not df_team.empty:
@@ -579,9 +580,21 @@ def get_set_pieces(df, team_name):
              free_kicks = df_team[df_team[fk_col].astype(str).str.lower().str.strip().isin(['1', 'true', 'yes', 'si', 'y'])].copy()
              # Filter dangerous? (Attacking Third)
              free_kicks = free_kicks[free_kicks['x'] > 60]
+
+        penalty_col = None
+        for col in df_team.columns:
+            if not isinstance(col, str): continue
+            if col.lower().strip() == 'penalty':
+                penalty_col = col
+                break
+
+        if penalty_col:
+            penalty_events = df_team[df_team[penalty_col].astype(str).str.lower().str.strip().isin(['1', 'true', 'yes', 'si', 'y'])].copy()
+            shot_events = ['Goal', 'Miss', 'Saved Shot', 'Post']
+            penalties = penalty_events[penalty_events['event'].isin(shot_events)].copy()
         
     return {
         "corners": corners,
-        "free_kicks": free_kicks
+        "free_kicks": free_kicks,
+        "penalties": penalties,
     }
-
