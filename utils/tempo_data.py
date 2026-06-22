@@ -1,11 +1,9 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any
 from collections import defaultdict
 from utils.possession_engine import extract_possession_chains
 
-def calculate_distance(x1, y1, x2, y2):
-    return np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
 def process_tempo_network(df: pd.DataFrame, team_name: str) -> Dict[str, Any]:
     """
@@ -46,7 +44,6 @@ def process_tempo_network(df: pd.DataFrame, team_name: str) -> Dict[str, Any]:
         current_holder = None
         holder_start_time = None
         holder_start_x = None
-        holder_start_y = None
         pending_pass = None
         
         for ev in chain.events:
@@ -75,12 +72,11 @@ def process_tempo_network(df: pd.DataFrame, team_name: str) -> Dict[str, Any]:
                     # Receive ball exact info
                     holder_start_time = pending_pass['pass_time']
                     holder_start_x = pending_pass['end_x']
-                    holder_start_y = pending_pass['end_y']
+                    pending_pass['end_y']
                     pending_pass = None
                 else:
                     holder_start_time = time
                     holder_start_x = x
-                    holder_start_y = y
                 
                 current_holder = player
                 
@@ -189,4 +185,3 @@ def process_tempo_network(df: pd.DataFrame, team_name: str) -> Dict[str, Any]:
         'team_avg_ttrp': round(np.mean([p['TTRP'] for p in profiles]), 1) if profiles else 0.0,
         'team_total_connections': sum(e['count'] for e in edges)
     }
-

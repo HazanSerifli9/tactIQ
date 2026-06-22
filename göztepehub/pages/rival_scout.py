@@ -7,7 +7,6 @@ import io
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from mplsoccer import Pitch
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
 
@@ -501,7 +500,7 @@ def _build_possession_line_height(matches, team_name, rival_label):
             title='IN POSSESSION LINE HEIGHT & TEAM LENGTH',
             icon='⚽'
         )
-    except Exception as e:
+    except Exception:
         import traceback
         traceback.print_exc()
 
@@ -1295,19 +1294,48 @@ def _draw_defensive_phase_blocks(matches, team_name):
     plt.tight_layout()
     return _fig_b64(fig)
 
-def _draw_transition_after_map(tr_data, mode='win'):
+def _transition_filter_outcome(mode, transition_filter):
+    if transition_filter in (None, 'all'):
+        return None
+    if mode == 'win':
+        return {
+            'goals': 'goal',
+            'shots': 'shot',
+            'f3': 'f3',
+            'negative': 'lost',
+            'safe': 'retained',
+        }.get(transition_filter)
+    return {
+        'goals': 'opp_goal',
+        'shots': 'opp_shot',
+        'f3': 'opp_f3',
+        'negative': 'recovered',
+        'safe': 'survived',
+    }.get(transition_filter)
+
+
+def _draw_transition_after_map(tr_data, mode='win', transition_filter='all'):
     base_color = GREEN if mode == 'win' else RED
     after_color = GOLD if mode == 'win' else ORANGE
     outcome_colors = {
         'goal': GOLD, 'shot': BLUE, 'f3': PURPLE, 'lost': RED, 'retained': GREEN,
         'opp_goal': GOLD, 'opp_shot': RED, 'opp_f3': ORANGE, 'recovered': GREEN, 'survived': BLUE,
     }
+    filter_outcome = _transition_filter_outcome(mode, transition_filter)
+    coords = [
+        c for c in tr_data['coords']
+        if filter_outcome is None or c.get('outcome') == filter_outcome
+    ]
+    after = [
+        a for a in tr_data.get('after', [])
+        if filter_outcome is None or a.get('outcome') == filter_outcome
+    ]
     p, fig, ax = _make_pitch(figsize=(11, 7))
-    for c in tr_data['coords']:
+    for c in coords:
         p.scatter([c['x']], [c['y']], ax=ax,
                   color=outcome_colors.get(c.get('outcome'), base_color),
                   s=34, alpha=0.72, edgecolors='white', linewidths=0.25)
-    for a in tr_data.get('after', [])[:90]:
+    for a in after[:90]:
         ax.annotate('', xy=(a['x1'], a['y1']), xytext=(a['x0'], a['y0']),
                     arrowprops=dict(
                         arrowstyle='->',
@@ -1329,6 +1357,11 @@ def _draw_transition_after_map(tr_data, mode='win'):
     for key, label in legend_items:
         ax.scatter([], [], color=outcome_colors[key], s=36, label=label)
     _draw_pitch_title(ax, 'NEXT 10 SECONDS AFTER RECOVERY' if mode == 'win' else 'NEXT 10 SECONDS AFTER LOSS')
+    if filter_outcome is not None and not coords:
+        ax.text(50, 50, 'NO EVENTS FOR SELECTED FILTER',
+                ha='center', va='center', color='white', fontsize=12, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.45', facecolor='#111827',
+                          edgecolor='none', alpha=0.85))
     _legend(ax)
     return _fig_b64(fig)
 
@@ -2034,13 +2067,13 @@ def _build_defensive(matches, team_name, rival_label):
     ])
 
 
-def _build_off_transitions(matches, team_name, rival_label):
+def _build_off_transitions(matches, team_name, rival_label, transition_filter='all'):
     sections = []
     try:
         tr = _compute_transitions(matches, team_name)
 
         # ── Ball Wins (Attacking Transitions) ─────────────────
-        img_w = _draw_transition_after_map(tr['win'], mode='win')
+        img_w = _draw_transition_after_map(tr['win'], mode='win', transition_filter=transition_filter)
 
         sections.append(_card(
             dbc.Row([
@@ -2095,13 +2128,13 @@ def _build_off_transitions(matches, team_name, rival_label):
     ])
 
 
-def _build_def_transitions(matches, team_name, rival_label):
+def _build_def_transitions(matches, team_name, rival_label, transition_filter='all'):
     sections = []
     try:
         tr = _compute_transitions(matches, team_name)
 
         # ── Ball Losses (Defensive Transitions) ───────────────
-        img_l = _draw_transition_after_map(tr['loss'], mode='loss')
+        img_l = _draw_transition_after_map(tr['loss'], mode='loss', transition_filter=transition_filter)
 
         sections.append(_card(
             dbc.Row([
@@ -2298,6 +2331,24 @@ def layout():
                     labelClassName='pm-tab-radio-label',
                 ),
             ]),
+            html.Div(id='scout-transition-filter-wrap', style={'display': 'none'}, children=[
+                dbc.RadioItems(
+                    id='scout-transition-filter',
+                    options=[
+                        {'label': 'All', 'value': 'all'},
+                        {'label': 'Goals', 'value': 'goals'},
+                        {'label': 'Shots', 'value': 'shots'},
+                        {'label': 'F3', 'value': 'f3'},
+                        {'label': 'Lost / Recovered', 'value': 'negative'},
+                        {'label': 'Retained / Survived', 'value': 'safe'},
+                    ],
+                    value='all',
+                    inline=True,
+                    className='pm-tab-radio-group',
+                    inputClassName='pm-tab-radio-input',
+                    labelClassName='pm-tab-radio-label',
+                ),
+            ]),
 
             # ── Tab content ───────────────────────────────────
             html.Div(id='scout-tab-content', style={'marginTop': '8px'}),
@@ -2354,13 +2405,24 @@ def update_match_options(rival_label):
 
 
 @callback(
+    Output('scout-transition-filter-wrap', 'style'),
+    Input('scout-tab', 'value'),
+)
+def toggle_scout_transition_filter(active_tab):
+    if active_tab in ('off-trans', 'def-trans'):
+        return {'display': 'flex', 'justifyContent': 'center', 'margin': '0 0 18px'}
+    return {'display': 'none'}
+
+
+@callback(
     [Output('scout-match-card',    'children'),
      Output('scout-tab-content',   'children')],
     [Input('scout-rival-selector', 'value'),
      Input('scout-match-selector', 'value'),
-     Input('scout-tab',            'value')],
+     Input('scout-tab',            'value'),
+     Input('scout-transition-filter', 'value')],
 )
-def update_scout_content(rival_label, selected_file, active_tab):
+def update_scout_content(rival_label, selected_file, active_tab, transition_filter):
     if not rival_label or not selected_file:
         return html.Div(), html.Div()
 
@@ -2383,8 +2445,8 @@ def update_scout_content(rival_label, selected_file, active_tab):
     if   active_tab == 'projected-xi': content = _build_projected_xi(all_matches, team_name, rival_display)
     elif active_tab == 'off':        content = _build_offensive(single, team_name, rival_display)
     elif active_tab == 'def':        content = _build_defensive(single, team_name, rival_display)
-    elif active_tab == 'off-trans':  content = _build_off_transitions(single, team_name, rival_display)
-    elif active_tab == 'def-trans':  content = _build_def_transitions(single, team_name, rival_display)
+    elif active_tab == 'off-trans':  content = _build_off_transitions(single, team_name, rival_display, transition_filter)
+    elif active_tab == 'def-trans':  content = _build_def_transitions(single, team_name, rival_display, transition_filter)
     elif active_tab == 'set-pieces': content = _build_set_pieces(single, team_name, rival_display)
     else:                            content = html.Div()
 

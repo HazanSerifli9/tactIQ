@@ -1,8 +1,7 @@
 
 import pandas as pd
-import numpy as np
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from utils.data import get_data_dir
 from utils.cache import disk_cache
 
@@ -85,7 +84,7 @@ def process_box_entry_data(league: str = "Süper Lig", year: str = "2024") -> Li
             # Currently relying on explicit pass events. Carries inferred from tracking data
             # or sequential event logic would be added here.
 
-        except Exception as e:
+        except Exception:
             # print(f"Error processing {filename}: {e}")
             continue
 

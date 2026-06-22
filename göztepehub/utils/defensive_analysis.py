@@ -1,5 +1,3 @@
-import pandas as pd
-import numpy as np
 
 GOZTEPE = 'Göztepe Spor Kulübü'
 # Defending team goal is at x=0. Attacking team goal is at x=100.
@@ -40,7 +38,7 @@ def analyze_defensive_match(df, team_name):
     opponent = [t for t in teams if t != team_name]
     opp_name = opponent[0] if opponent else 'Unknown'
 
-    # 1. Defansif Aksiyonlar ve Çizgi (Shape & Pressing)
+    # 1. Defensive Actions and Line (Shape & Pressing)
     def_events = df[(df['team_name'] == team_name) & (df['event'].isin(DEFENSIVE_EVENTS))]
     def_actions = []
     aerial_duels_box = []
@@ -59,8 +57,8 @@ def analyze_defensive_match(df, team_name):
             # outcome 1 generally means won the aerial duel in this format
             aerial_duels_box.append(1 if row.get('outcome') == 1 else 0)
 
-    # 2. Zaafiyetler (Vulnerability Map)
-    # Rakibin Final 3rd'e başarılı girmesi (Sağ, Sol, Merkez)
+    # 2. Vulnerabilities (Vulnerability Map)
+    # Opponent's successful Final 3rd entries (Right, Left, Center)
     opp_events_pass = df[(df['team_name'] == opp_name) & (df['event'] == 'Pass') & (df['outcome'] == 1)]
     f3_entries = []
     zone14_passes = []
@@ -70,21 +68,21 @@ def analyze_defensive_match(df, team_name):
         end_x = row.get('Pass End X', 0)
         end_y = row.get('Pass End Y', 0)
         
-        # Rakip F3'e girdi mi?
+        # Did the opponent enter Final 3rd?
         if start_x < 66.6 and end_x >= 66.6:
             f3_entries.append(_get_flank(end_y))
-            
-        # Zone 14 Control (Rakip Zone 14'e pas attı mı?)
-        if _is_in_zone14(end_x, end_y):
-            zone14_passes.append(1) # Basarili pas
 
-    # Rakibin başarısız Zone 14 paslarını da sayalım (kontrol oranını bulmak için)
+        # Zone 14 Control (Did the opponent pass into Zone 14?)
+        if _is_in_zone14(end_x, end_y):
+            zone14_passes.append(1) # Successful pass
+
+    # Also count the opponent's failed Zone 14 passes (to compute control rate)
     opp_failed_passes = df[(df['team_name'] == opp_name) & (df['event'] == 'Pass') & (df['outcome'] == 0)]
     for _, row in opp_failed_passes.iterrows():
         if _is_in_zone14(row.get('Pass End X', 0), row.get('Pass End Y', 0)):
             zone14_passes.append(0)
 
-    # 3. Yenen Gollerden Önceki 30 Saniye (Pre-Goal Structure)
+    # 3. The 30 seconds before goals conceded (Pre-Goal Structure)
     goals = df[(df['team_name'] == opp_name) & (df['event'] == 'Goal')]
     pre_goal_windows = []
     
@@ -92,7 +90,7 @@ def analyze_defensive_match(df, team_name):
         goal_time = goal['time_min'] * 60 + goal['time_sec']
         t_start = max(0, goal_time - 30)
         
-        # O 30 saniye dilimindeki aksiyonlar
+        # Actions in that 30-second window
         window = df[(df['time_min'] * 60 + df['time_sec'] >= t_start) & 
                     (df['time_min'] * 60 + df['time_sec'] <= goal_time)]
         

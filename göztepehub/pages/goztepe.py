@@ -1,7 +1,5 @@
 import dash
 from dash import html, dcc
-import dash_bootstrap_components as dbc
-import plotly.graph_objects as go
 from utils.data import extract_fixture_data, calculate_standings
 
 dash.register_page(__name__, path='/', title='TactIQ | Göztepe Hub')
@@ -13,8 +11,6 @@ def layout():
     df = calculate_standings(matches)
     
     ppg = 0.0
-    gf_pg = 0.0
-    ga_pg = 0.0
     played = 0
     if not df.empty:
         goz_df = df[df['Team'] == 'Göztepe Spor Kulübü']
@@ -23,8 +19,8 @@ def layout():
             played = goz_df['Played'].values[0]
             if played > 0:
                 ppg = round(pts / played, 2)
-                gf_pg = round(goz_df['GF'].values[0] / played, 2)
-                ga_pg = round(goz_df['GA'].values[0] / played, 2)
+                round(goz_df['GF'].values[0] / played, 2)
+                round(goz_df['GA'].values[0] / played, 2)
 
     return html.Div(
         className="page-wrap",

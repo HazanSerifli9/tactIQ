@@ -1,6 +1,5 @@
 import dash
-from dash import html, dcc, dash_table
-import pandas as pd
+from dash import html, dash_table
 from utils.data import extract_fixture_data, calculate_standings
 
 dash.register_page(__name__, path="/standings", title='TactIQ | Standings')

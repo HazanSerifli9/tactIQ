@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspec
-import numpy as np
 import pandas as pd
 from io import BytesIO
 import base64
@@ -10,9 +9,8 @@ from typing import Dict, Any
 from mplsoccer import Pitch
 
 from utils.visuals import (
-    TACTIQ_BG, TACTIQ_FG, TACTIQ_ACCENT, TACTIQ_HOME,
-    preprocess_for_network, get_passes_between_df,
-    get_starting_xi, get_shorter_name, fig_to_base64,
+    TACTIQ_BG, TACTIQ_FG, preprocess_for_network, get_passes_between_df,
+    get_starting_xi, get_shorter_name,
 )
 
 ROLE_COLORS = {
@@ -123,7 +121,7 @@ def plot_hybrid_pass_network(df, team_name: str, t_data: Dict[str, Any]) -> str:
             best_fwd_count  = int(fc.max())
 
     # ── 3. Tempo lookup maps ──────────────────────────────────────────────
-    t_nodes    = t_data.get('nodes', {})
+    t_data.get('nodes', {})
     t_edges    = t_data.get('edges', [])
     t_profiles = t_data.get('profiles', [])
 
@@ -304,92 +302,6 @@ def plot_hybrid_pass_network(df, team_name: str, t_data: Dict[str, Any]) -> str:
 
 
 # ─── Original Tempo Network (kept for backward compat) ───────────────────────
-
-def plot_tempo_network(tempo_data: Dict[str, Any], team_name: str) -> str:
-    """Render the Tempo Network onto a pitch. Returns base64 PNG string."""
-    fig, ax = plt.subplots(figsize=(10, 7))
-    fig.patch.set_facecolor(TACTIQ_BG)
-    ax.set_facecolor(TACTIQ_BG)
-
-    pitch = Pitch(pitch_type='opta', pitch_color=TACTIQ_BG, line_color=TACTIQ_FG,
-                  line_alpha=0.3, linewidth=1.5, corner_arcs=True)
-    pitch.draw(ax=ax)
-
-    nodes = tempo_data.get('nodes', {})
-    edges = tempo_data.get('edges', [])
-
-    if not nodes or not edges:
-        ax.text(50, 50, 'No tempo data available', ha='center', va='center', color=TACTIQ_FG)
-        return _fig_to_base64(fig)
-
-    max_count = max([e['count'] for e in edges]) if edges else 1
-    min_threshold = max(2, max_count * 0.1)
-    valid_edges = [e for e in edges
-                   if e['count'] >= min_threshold
-                   and e['sender'] in nodes and e['receiver'] in nodes]
-
-    for edge in valid_edges:
-        n1, n2 = nodes[edge['sender']], nodes[edge['receiver']]
-        ttrp  = edge['avg_ttrp']
-        carry = edge['avg_carry_x']
-        count = edge['count']
-
-        norm_ttrp = max(0, min((ttrp - 2.5) / 1.5, 1.0))
-        color = TEMPO_CMAP(norm_ttrp)
-        lw    = (count / max_count) * 6 + 1
-
-        arrow = patches.FancyArrowPatch(
-            (n1['x'], n1['y']), (n2['x'], n2['y']),
-            connectionstyle='arc3,rad=0.1',
-            arrowstyle='->,head_length=5,head_width=3',
-            color=color, alpha=0.5, lw=lw, zorder=1,
-        )
-        ax.add_patch(arrow)
-
-        if carry > 3.0:
-            carry_arrow = patches.FancyArrowPatch(
-                (n1['x'], n1['y']), (n2['x'], n2['y']),
-                connectionstyle='arc3,rad=0.1',
-                linestyle='--', color='#22c55e', alpha=0.8, lw=lw * 0.5, zorder=2,
-            )
-            ax.add_patch(carry_arrow)
-
-    for player, stats in nodes.items():
-        x, y   = stats['x'], stats['y']
-        jersey = stats.get('jersey_number')
-        label  = str(int(jersey)) if jersey is not None else ''.join(
-            [n[0] for n in player.split()[:2]]).upper()
-
-        orig_role = 'Connector'
-        for p in tempo_data.get('profiles', []):
-            if p['Player'] == player:
-                orig_role = p['Role']
-                break
-
-        role = COACH_ROLES.get(orig_role, orig_role)
-        border_color = ROLE_COLORS.get(role, '#ffffff')
-        circle = patches.Circle((x, y), radius=2.5, facecolor='#111827',
-                                 edgecolor=border_color, lw=2, zorder=4)
-        ax.add_patch(circle)
-        ax.text(x, y, label, ha='center', va='center', color='white',
-                fontsize=10, fontweight='bold', zorder=5)
-
-    clean_name = team_name.replace(' Kulübü','').replace(' Spor','').replace(' Futbol','').strip()
-    ax.text(50, -4, f'Tempo Network | Speed of Play — {clean_name}',
-            ha='center', fontsize=12, color=TACTIQ_FG, fontweight='bold')
-    ax.text(50, -7, 'Edge color = TTRP | Thickness = Volume | Dashed Green = Carry',
-            ha='center', fontsize=9, color='#a0aec0')
-
-    sm   = plt.cm.ScalarMappable(cmap=TEMPO_CMAP, norm=plt.Normalize(vmin=2.5, vmax=4.0))
-    cbar = fig.colorbar(sm, ax=ax, orientation='horizontal',
-                        fraction=0.03, pad=0.1, aspect=40)
-    cbar.set_ticks([2.5, 4.0])
-    cbar.set_ticklabels(['Fast (<2.5s)', 'Slow (>4.0s)'])
-    cbar.ax.tick_params(colors=TACTIQ_FG, labelsize=8)
-    cbar.outline.set_edgecolor('#333')
-
-    plt.tight_layout()
-    return _fig_to_base64(fig)
 
 
 def _fig_to_base64(fig) -> str:

@@ -4,7 +4,7 @@ Ball Trace — Territorial Time Analysis
 Instead of heat maps or RCS, track where the ball SPENT TIME on the pitch.
 Which zone, which flank, how many minutes — because football = goals / time.
 
-Duran top (set piece) süreleri ayrı tutulur.
+Dead ball (set piece) durations are tracked separately.
 
 Calculates:
 - 9-zone grid time distribution (3x3: thirds × flanks)
@@ -16,7 +16,7 @@ Calculates:
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any
 
 # Events that signal dead ball / stoppage — exclude from time calculations
 DEAD_BALL_EVENTS = {

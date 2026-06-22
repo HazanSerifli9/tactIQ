@@ -1,6 +1,6 @@
 
 import dash
-from dash import html, dcc
+from dash import html
 import dash_bootstrap_components as dbc
 from utils.data import extract_fixture_data
 
@@ -49,7 +49,7 @@ def _fixture_sections():
         
         cards = []
         for i, match in enumerate(matches_in_week):
-            match_id = match.get('source_file', f'w{week}-m{i}')
+            match.get('source_file', f'w{week}-m{i}')
             
             card = html.Div([
                 html.Div([

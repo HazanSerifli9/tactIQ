@@ -70,7 +70,6 @@ def calculate_match_stats(df):
     unique_players = [p for p in unique_players if isinstance(p, str)]
     
     # 1. Shot Sequence
-    shot_seq_counts = {'playerName': [], 'total': []}
     
     # Optimization: Vectorized or filtering is better than loop, but using loop to match user reliability
     # Filter DF once?
@@ -85,7 +84,7 @@ def calculate_match_stats(df):
         
         # Shot Assist (KeyPass)
         # Check if keyPass is 1 or 1.0
-        kps = len(p_df[(p_df['typeId'] == 'Pass') & (p_df['keyPass'] == 1)])
+        len(p_df[(p_df['typeId'] == 'Pass') & (p_df['keyPass'] == 1)])
         
         # Buildup to shot (Pass led to a KeyPass)
         # Shift logic: shift(-1) logic is tricky on filtered p_df if not continuous.
@@ -311,18 +310,3 @@ def calculate_player_rankings(df):
             d['shortName'] = d['playerName'].apply(get_short_name)
     
     return sh_sq_df, passer_df, defender_df
-
-
-def get_unique_years():
-    """
-    Returns unique years/seasons from the data.
-    """
-    # Simple placeholder or derived from data
-    # Assuming current season for now as files don't guarantee year column
-    return ["2024-2025"]
-
-def get_leagues():
-    """
-    Returns unique leagues.
-    """
-    return ["Süper Lig"]

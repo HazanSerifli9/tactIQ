@@ -1,23 +1,22 @@
 """
 Tactical Style Classifier
 ==========================
-Stephanatos metodolojisine göre Süper Lig takımlarını sınıflandırır.
+Classifies Süper Lig teams using the Stephanatos methodology.
 
-İki ana boyut:
-  - Possession Style Score  → ne kadar kontrollü / direkt oynuyor
-  - Defensive Territory Score → savunma hattı nerede, ne kadar agresif
+Two main dimensions:
+  - Possession Style Score   -> how controlled / direct the team plays
+  - Defensive Territory Score -> where the defensive line is, how aggressive
 
-Wyscout verisi önceliği:
+Wyscout data priority:
   xG, PPDA, shot distance, pass accuracy, long pass %, avg passes/poss
-  gibi metrikler artık doğrudan Wyscout'tan alınır.
-  Event verisi bu değerleri tamamlayan bileşenleri sağlar (seq10, def_height vb.)
+  are now taken directly from Wyscout.
+  Event data provides the complementary components (seq10, def_height, etc.)
 
-Referans: Nikolas Stephanatos, "Tactical Performance Profiling in Football"
+Reference: Nikolas Stephanatos, "Tactical Performance Profiling in Football"
 """
 
 import numpy as np
 import pandas as pd
-from typing import Optional
 from utils.possession_engine import extract_possession_chains
 from shared.logger import get_logger
 from utils.cache import disk_cache
@@ -25,21 +24,21 @@ from utils.cache import disk_cache
 logger = get_logger(__name__)
 
 
-# ── Metrik ağırlıkları ──────────────────────────────────────────────────────
+# Metric weights
 
-# On-Ball bileşen ağırlıkları (toplam 1.0)
-W_PASS_ACC     = 0.20   # Wyscout: pas isabet %
-W_FWD_PASS     = 0.15   # Event: ileri pas %
-W_LONG_BALL    = 0.15   # Wyscout: uzun top % (ters: yüksek = direkt)
-W_SEQ_10       = 0.15   # Event: 10+ paslı sekans oranı
-W_XG_PER_SHOT  = 0.20   # Wyscout: şut başına xG (kaliteli pozisyon)
-W_AVG_POSS     = 0.15   # Wyscout: ortalama pas/possesion (yüksek=kontrollü)
+# On-Ball component weights (sum to 1.0)
+W_PASS_ACC     = 0.20   # Wyscout: pass accuracy %
+W_FWD_PASS     = 0.15   # Event: forward pass %
+W_LONG_BALL    = 0.15   # Wyscout: long ball % (inverted: high = direct)
+W_SEQ_10       = 0.15   # Event: 10+ pass sequence rate
+W_XG_PER_SHOT  = 0.20   # Wyscout: xG per shot (chance quality)
+W_AVG_POSS     = 0.15   # Wyscout: avg passes per possession (high = controlled)
 
-# Off-Ball bileşen ağırlıkları (toplam 1.0)
-W_PPDA         = 0.35   # Wyscout: PPDA (ters: düşük = yüksek pres)
-W_DEF_HEIGHT   = 0.25   # Event: savunma hattı yüksekliği
-W_SHOT_DIST    = 0.20   # Wyscout: avg shot distance (ters: yakın = yüksek pres)
-W_DEF_ACT90    = 0.20   # Event: savunma aksiyonu / 90dk
+# Off-Ball component weights (sum to 1.0)
+W_PPDA         = 0.35   # Wyscout: PPDA (inverted: low = high press)
+W_DEF_HEIGHT   = 0.25   # Event: defensive line height
+W_SHOT_DIST    = 0.20   # Wyscout: avg shot distance (inverted: close = high press)
+W_DEF_ACT90    = 0.20   # Event: defensive actions per 90
 
 STYLE_LABELS = {
     (True,  True):  "Control-ball",
@@ -59,28 +58,28 @@ def _safe_ratio(num, denom, default=0.0):
 @disk_cache
 def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Tüm takımlar için taktik stil profilini hesaplar.
+    Compute tactical style profiles for all teams.
 
-    Wyscout verisi öncelikliyse oradan alınır; yoksa event verisinden hesaplanır.
+    Wyscout data is preferred when available; otherwise values are computed from event data.
 
     Args:
-        events_df: load_all_events() çıktısı (tüm maçlar birleşik)
+        events_df: output of load_all_events() (all matches combined)
 
     Returns:
-        Her satır bir takım olan DataFrame:
+        DataFrame with one row per team:
           team, pass_acc_pct, fwd_pass_pct, long_ball_pct,
           seq10_pct, xg_per_shot, avg_passes_per_poss,
           ppda, def_height, avg_shot_distance, def_act90,
           possession_score, defensive_score, style_label
     """
-    # ── Wyscout verisini yükle ─────────────────────────────────────────────
+    # Load Wyscout data
     try:
         from utils.wyscout_loader import load_wyscout_team_averages, get_wyscout_team_name_map
         wyscout_df = load_wyscout_team_averages()
         name_map   = get_wyscout_team_name_map()
         has_wyscout = not wyscout_df.empty
     except Exception as e:
-        logger.warning("Wyscout verisi yüklenemedi, event verisine geri dönülüyor: %s", e)
+        logger.warning("Could not load Wyscout data, falling back to event data: %s", e)
         wyscout_df  = pd.DataFrame()
         name_map    = {}
         has_wyscout = False
@@ -119,7 +118,7 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
         if df_team.empty:
             continue
 
-        # Wyscout takım adını bul
+        # Find the Wyscout team name
         wy_name = name_map.get(team, team)
         wy_row  = None
         if has_wyscout and 'wyscout_team' in wyscout_df.columns:
@@ -127,23 +126,23 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
             if not matches.empty:
                 wy_row = matches.iloc[0]
 
-        # ── Maç sayısı ────────────────────────────────────────────────────
+        # Match count
         match_ids = df_team['match_id'].unique()
         n_matches = max(len(match_ids), 1)
 
-        # ── ON-BALL metrikleri ─────────────────────────────────────────────
+        # ON-BALL metrics
 
         passes = df_team[df_team['event'] == 'Pass']
         total_passes = len(passes)
 
-        # 1. Pas isabet % — Wyscout öncelikli
+        # 1. Pass accuracy % - prefer Wyscout
         if wy_row is not None and pd.notna(wy_row.get('pass_accuracy_pct', np.nan)):
             pass_acc_pct = float(wy_row['pass_accuracy_pct'])
         else:
             successful_passes = len(passes[passes['outcome'] == 1])
             pass_acc_pct = _safe_ratio(successful_passes, total_passes) * 100
 
-        # 2. İleri pas % — Event verisi
+        # 2. Forward pass % - event data
         if 'Pass End X' in passes.columns:
             fwd_passes = passes[
                 pd.to_numeric(passes['Pass End X'], errors='coerce') >
@@ -153,7 +152,7 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
         else:
             fwd_pass_pct = 50.0
 
-        # 3. Uzun top % — Wyscout öncelikli
+        # 3. Long ball % - prefer Wyscout
         if wy_row is not None and pd.notna(wy_row.get('long_pass_pct', np.nan)):
             long_ball_pct = float(wy_row['long_pass_pct'])
         elif 'Long ball' in df_team.columns:
@@ -164,12 +163,12 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
         else:
             long_ball_pct = 0.0
 
-        # 4. 10+ paslı sekanslar — Precalculated
+        # 4. 10+ pass sequences - precalculated
         seq_total, seq_10plus = team_seq_stats.get(team, [0, 0])
 
         seq10_pct = _safe_ratio(seq_10plus, seq_total) * 100
 
-        # 5. Şut başına xG — Wyscout öncelikli
+        # 5. xG per shot - prefer Wyscout
         shot_events = ['Goal', 'Miss', 'Attempt Saved', 'Post', 'Saved Shot']
         shots = df_team[df_team['event'].isin(shot_events)]
         n_shots = len(shots)
@@ -185,15 +184,15 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
                 total_xg = 0.0
             xg_per_shot = _safe_ratio(total_xg, n_shots)
 
-        # 6. Ortalama pas/possession — Wyscout öncelikli (yüksek = kontrollü)
+        # 6. Average passes per possession - prefer Wyscout (high = controlled)
         if wy_row is not None and pd.notna(wy_row.get('avg_passes_per_poss', np.nan)):
             avg_passes_per_poss = float(wy_row['avg_passes_per_poss'])
         else:
             avg_passes_per_poss = _safe_ratio(total_passes, max(seq_total, 1))
 
-        # ── OFF-BALL metrikleri ────────────────────────────────────────────
+        # OFF-BALL metrics
 
-        # 7. PPDA — Wyscout öncelikli (düşük = yüksek pres)
+        # 7. PPDA - prefer Wyscout (low = high press)
         if wy_row is not None and pd.notna(wy_row.get('ppda', np.nan)):
             ppda = float(wy_row['ppda'])
         else:
@@ -211,7 +210,7 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
             ]
             ppda = _safe_ratio(len(opp_passes_own_half), len(def_actions_in_opp), default=20.0)
 
-        # 8. Savunma hattı yüksekliği — Event verisi
+        # 8. Defensive line height - event data
         ball_wins = df_team[
             df_team['event'].isin(['Tackle', 'Interception', 'Ball Recovery']) &
             (df_team['outcome'] == 1)
@@ -221,13 +220,13 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
         else:
             def_height = 40.0
 
-        # 9. Ortalama şut mesafesi — Wyscout öncelikli (düşük = yüksek baskı)
+        # 9. Average shot distance - prefer Wyscout (low = high pressure)
         if wy_row is not None and pd.notna(wy_row.get('avg_shot_distance', np.nan)):
             avg_shot_distance = float(wy_row['avg_shot_distance'])
         else:
-            avg_shot_distance = 20.0  # Default: orta mesafe
+            avg_shot_distance = 20.0  # Default: mid distance
 
-        # 10. Savunma aksiyonları / 90dk — Event verisi
+        # 10. Defensive actions per 90 - event data
         def_acts = len(df_team[df_team['event'].isin(
             ['Tackle', 'Interception', 'Challenge', 'Ball Recovery', 'Clearance']
         )])
@@ -246,7 +245,7 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
             'def_height':         round(def_height, 2),
             'avg_shot_distance':  round(avg_shot_distance, 2),
             'def_act90':          round(def_act90, 2),
-            # Wyscout ek metrikler (görsel tablo için)
+            # Extra Wyscout metrics (for the visual table)
             'xg_for':             float(wy_row['xg_for'])   if wy_row is not None and pd.notna(wy_row.get('xg_for'))   else np.nan,
             'xg_against':         float(wy_row.get('shots_against', np.nan)) if wy_row is not None else np.nan,
         })
@@ -260,14 +259,14 @@ def build_team_style_profiles(events_df: pd.DataFrame) -> pd.DataFrame:
 
 def _build_from_wyscout_only(wyscout_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Sadece Wyscout verisi ile profil oluştur (event verisi yoksa).
+    Build a profile using only Wyscout data (when no event data is available).
     """
     rows = []
     for _, wy in wyscout_df.iterrows():
         team = wy['wyscout_team']
 
         pass_acc_pct       = float(wy.get('pass_accuracy_pct', 75))
-        fwd_pass_pct       = 50.0   # bilinmiyor
+        fwd_pass_pct       = 50.0   # unknown
         long_ball_pct      = float(wy.get('long_pass_pct', 20))
         seq10_pct          = 0.0
         xg_per_shot        = _safe_ratio(
@@ -305,7 +304,7 @@ def _build_from_wyscout_only(wyscout_df: pd.DataFrame) -> pd.DataFrame:
 
 def _normalize_and_label(profiles: pd.DataFrame) -> pd.DataFrame:
     """
-    Ham metriklerden percentile puanları ve stil etiketleri üretir.
+    Produce percentile scores and style labels from raw metrics.
     """
 
     def percentile_rank(series: pd.Series) -> pd.Series:
@@ -316,21 +315,21 @@ def _normalize_and_label(profiles: pd.DataFrame) -> pd.DataFrame:
             index=series.index
         )
 
-    # ON-BALL normalizasyon
+    # ON-BALL normalization
     profiles['p_pass_acc']       = percentile_rank(profiles['pass_acc_pct'])
     profiles['p_fwd_pass']       = percentile_rank(profiles['fwd_pass_pct'])
-    profiles['p_long_ball']      = 100 - percentile_rank(profiles['long_ball_pct'])  # ters
+    profiles['p_long_ball']      = 100 - percentile_rank(profiles['long_ball_pct'])  # inverted
     profiles['p_seq10']          = percentile_rank(profiles['seq10_pct'])
     profiles['p_xg_per_shot']    = percentile_rank(profiles['xg_per_shot'])
     profiles['p_avg_poss']       = percentile_rank(profiles['avg_passes_per_poss'])
 
-    # OFF-BALL normalizasyon
-    profiles['p_ppda']           = 100 - percentile_rank(profiles['ppda'])           # ters: düşük PPDA = yüksek pres
+    # OFF-BALL normalization
+    profiles['p_ppda']           = 100 - percentile_rank(profiles['ppda'])           # inverted: low PPDA = high press
     profiles['p_def_height']     = percentile_rank(profiles['def_height'])
-    profiles['p_shot_dist']      = 100 - percentile_rank(profiles['avg_shot_distance'])  # ters: yakın = yüksek pres
+    profiles['p_shot_dist']      = 100 - percentile_rank(profiles['avg_shot_distance'])  # inverted: close = high press
     profiles['p_def_act90']      = percentile_rank(profiles['def_act90'])
 
-    # ── Kompozit Skorlar ─────────────────────────────────────────────────
+    # Composite scores
     profiles['possession_score'] = (
         profiles['p_pass_acc']    * W_PASS_ACC   +
         profiles['p_fwd_pass']    * W_FWD_PASS   +
@@ -347,7 +346,7 @@ def _normalize_and_label(profiles: pd.DataFrame) -> pd.DataFrame:
         profiles['p_def_act90']  * W_DEF_ACT90
     ).round(1)
 
-    # ── Stil Etiketi ────────────────────────────────────────────────────
+    # Style label
     lig_mean_poss = profiles['possession_score'].mean()
     lig_mean_def  = profiles['defensive_score'].mean()
     lig_std_poss  = profiles['possession_score'].std()

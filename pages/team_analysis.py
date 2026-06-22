@@ -1,6 +1,5 @@
 import dash
 from dash import html, dcc, Input, Output, callback
-import dash_bootstrap_components as dbc
 from utils.stats_visuals import (
     generate_team_ball_winning_plot,
     generate_team_common_zonal_actions_plot,

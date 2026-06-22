@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import base64
 import io
 import plotly.graph_objects as go
-from dash import html, dcc, callback, Input, Output
+from dash import html, dcc, callback, Input, Output, ALL, ctx
 import dash_bootstrap_components as dbc
 from utils.data import extract_fixture_data, calculate_standings, get_data_dir
 
@@ -854,6 +854,7 @@ def _build_benchmarking_section(rival, opp_name):
 GOZTEPE = 'Göztepe Spor Kulübü'
 
 TAB_TO_PHASE = {
+    'game-plan-tab':  'Game Plan',
     'offensive-tab':  'Offensive',
     'defensive-tab':  'Defensive',
     'off-trans-tab':  'Off. Transitions',
@@ -861,6 +862,7 @@ TAB_TO_PHASE = {
     'set-pieces-tab': 'Set Pieces',
 }
 TAB_LABELS = {
+    'game-plan-tab':  'Game Plan',
     'offensive-tab':  'Offensive',
     'defensive-tab':  'Defensive',
     'off-trans-tab':  'Off. Transitions',
@@ -1826,7 +1828,7 @@ def _build_buildup_rank_section(opponent):
 
 def _build_kpi_section(active_tab, stats, opp_name):
     # Retrieve KPIs based on active_tab
-    if active_tab == 'offensive-tab':
+    if active_tab in ('game-plan-tab', 'offensive-tab'):
         return html.Div()
         
     kpi_list = []
@@ -1894,7 +1896,186 @@ def _build_kpi_section(active_tab, stats, opp_name):
     return dbc.Row(cards, style={"maxWidth": "1200px", "margin": "0 auto 20px"})
 
 
+def _largest_buildup_lane(stats):
+    zones = stats.get('buildup', {}).get('zone', {})
+    lanes = {
+        'left': zones.get('left_pct', 0) or 0,
+        'center': zones.get('center_pct', 0) or 0,
+        'right': zones.get('right_pct', 0) or 0,
+    }
+
+    if not any(lanes.values()):
+        coords = stats.get('buildup', {}).get('coords', [])
+        lanes = {
+            'left': sum(1 for c in coords if float(c.get('y', 50)) < 33.3),
+            'center': sum(1 for c in coords if 33.3 <= float(c.get('y', 50)) <= 66.6),
+            'right': sum(1 for c in coords if float(c.get('y', 50)) > 66.6),
+        }
+        total = max(sum(lanes.values()), 1)
+        lanes = {k: round(v / total * 100, 1) for k, v in lanes.items()}
+
+    lane = max(lanes, key=lanes.get)
+    return lane, lanes.get(lane, 0)
+
+
+def _plan_card(title, body, color=_GOLD, tag=None):
+    return html.Div(className="coach-brief-item", style={
+        "minHeight": "auto",
+        "padding": "16px 18px",
+        "height": "100%",
+        "borderLeft": f"3px solid {color}",
+    }, children=[
+        html.Div(tag, className="coach-brief-label", style={
+            "fontSize": "0.58rem", "color": color, "marginBottom": "6px",
+        }) if tag else None,
+        html.Div(title, className="coach-brief-text", style={
+            "fontSize": "0.95rem", "fontWeight": "800", "color": "white",
+            "marginBottom": "8px",
+        }),
+        html.Div(body, style={
+            "fontSize": "0.74rem", "color": "var(--text-secondary)",
+            "lineHeight": "1.55",
+        }),
+    ])
+
+
+def _build_game_plan_content(stats, opp_name, opponent):
+    buildup = stats.get('buildup', {})
+    outcomes = buildup.get('outcomes_10s', {})
+    def_profile = stats.get('def_profile', {})
+    recoveries = stats.get('all_recoveries', [])
+    losses = stats.get('all_losses', [])
+    corners = stats.get('corners', {})
+    goalkicks = stats.get('goalkicks', {})
+
+    lane, lane_pct = _largest_buildup_lane(stats)
+    lane_label = {'left': 'left side', 'center': 'central lane', 'right': 'right side'}[lane]
+    force_lane = {'left': 'inside toward our midfield trap', 'center': 'wide, away from Zone 14', 'right': 'inside toward our midfield trap'}[lane]
+
+    total_rec = len(recoveries)
+    rec_shot_rate = round(sum(1 for r in recoveries if r.get('shot')) / max(total_rec, 1) * 100, 1) if total_rec else 0
+    total_losses = len(losses)
+    loss_shot_rate = round(sum(1 for l in losses if l.get('shot')) / max(total_losses, 1) * 100, 1) if total_losses else 0
+    loss_f3_rate = round(sum(1 for l in losses if l.get('reached_f3')) / max(total_losses, 1) * 100, 1) if total_losses else 0
+    turnover_pct = outcomes.get('turnover_pct', 0)
+    danger_after_turnover = outcomes.get('opp_danger_pct', 0)
+
+    def_line = def_profile.get('avg_def_line', 0) or 0
+    z14_allowed = def_profile.get('z14_success_allowed_pct', 0) or 0
+    aerial = def_profile.get('box_aerial_win_pct', 0) or 0
+
+    if def_line >= 45:
+        attacking_route = "Attack the space behind their back line early. Prepare diagonal runs from the weak-side winger and first-time passes after regains."
+        route_label = "Exploit High Line"
+    elif def_line <= 35 and def_line > 0:
+        attacking_route = "Be patient against their lower block. Move them side to side, arrive in Zone 14, then use cutbacks instead of hopeful crosses."
+        route_label = "Break Low Block"
+    else:
+        attacking_route = "Use mixed attacks: secure the first pass, then play quickly into the half-spaces before their midfield can reset."
+        route_label = "Control Half-Spaces"
+
+    if aerial >= 58:
+        crossing_plan = "Avoid repeated floated crosses into their centre-backs. Prefer low crosses, cutbacks, and second-post runs after switches."
+    elif aerial and aerial <= 45:
+        crossing_plan = "Attack the box with early crosses and back-post overloads. Their defensive aerial numbers suggest we can compete there."
+    else:
+        crossing_plan = "Cross selectively after moving their block. The better route is still low delivery into runners, not static box service."
+
+    if rec_shot_rate >= 18:
+        rest_defense = "Keep two plus one behind the ball when attacking. On loss, first defender delays, nearest midfielder blocks the forward pass, far fullback tucks in."
+    else:
+        rest_defense = "Counter-press aggressively after loss, but keep the far-side balance. Their transition shot rate is manageable if the first pass is blocked."
+
+    if loss_shot_rate >= 14 or loss_f3_rate >= 35:
+        transition_attack = "When we win it, play vertical immediately. First look: forward run into the channel, second look: Zone 14 support, third look: switch to the far winger."
+    else:
+        transition_attack = "Use the regain to pin them back, but do not force every counter. If the forward pass is closed, secure possession and attack the next wave."
+
+    corner_pref = "inswingers" if corners.get('inswinger', 0) >= corners.get('outswinger', 0) and corners.get('inswinger', 0) >= corners.get('straight', 0) else "outswingers" if corners.get('outswinger', 0) >= corners.get('straight', 0) else "straight deliveries"
+    gk_plan = "Press their short goal kicks" if goalkicks.get('long_pct', 0) < 45 else "Prepare for second balls from long goal kicks"
+
+    priority_cards = dbc.Row([
+        dbc.Col(_plan_card(
+            "Press Their Build-Up Lane",
+            f"{opp_name} start most often through the {lane_label} ({lane_pct}%). Show them {force_lane}, then jump on the backwards pass.",
+            _RED,
+            "WITHOUT THE BALL",
+        ), md=4),
+        dbc.Col(_plan_card(
+            route_label,
+            attacking_route,
+            _GOLD,
+            "WITH THE BALL",
+        ), md=4),
+        dbc.Col(_plan_card(
+            "Transition Rule",
+            transition_attack,
+            _GREEN,
+            "WHEN WE WIN IT",
+        ), md=4),
+    ], className="g-3", style={"marginBottom": "18px"})
+
+    detail_cards = dbc.Row([
+        dbc.Col(_plan_card(
+            "Defensive Transitions",
+            f"{opp_name}'s regains become shots {rec_shot_rate}% of the time. {rest_defense}",
+            _RED,
+        ), md=6),
+        dbc.Col(_plan_card(
+            "Final Third Choices",
+            f"Zone 14 allowed: {z14_allowed}%. Box aerial win rate: {aerial}%. {crossing_plan}",
+            _BLUE,
+        ), md=6),
+        dbc.Col(_plan_card(
+            "Set-Piece Preparation",
+            f"Main corner profile: {corner_pref}. {gk_plan}. Track their first two corner targets and protect the second-ball zone.",
+            _PURPLE,
+        ), md=6),
+        dbc.Col(_plan_card(
+            "Pressing Trigger",
+            f"Their build-up turnover rate is {turnover_pct}%, with {danger_after_turnover}% danger after those losses. Trigger pressure on poor body shape, square passes, and first touch toward their own goal.",
+            _GOLD,
+        ), md=6),
+    ], className="g-3")
+
+    principles = html.Div(className="goz-form-section", style={
+        "maxWidth": "980px", "margin": "0 auto 20px", "padding": "18px 20px",
+    }, children=[
+        html.Div(className="goz-section-header", style={
+            "marginBottom": "12px",
+            "flexDirection": "column",
+            "alignItems": "flex-start",
+            "gap": "8px",
+        }, children=[
+            html.Span(f"MATCH PLAN VS {opp_name.upper()}", className="goz-card-title", style={
+                "fontSize": "1.15rem",
+                "margin": 0,
+            }),
+            html.P("Coach-facing actions for how Göztepe should play this opponent.", className="goz-card-desc", style={
+                "margin": 0,
+            }),
+        ]),
+        dbc.Row([
+            dbc.Col(make_progress_bar("Build-up Turnover Target", turnover_pct, _RED), md=3),
+            dbc.Col(make_progress_bar("Counter-Attack Opportunity", loss_shot_rate, _GREEN), md=3),
+            dbc.Col(make_progress_bar("Opponent Transition Threat", rec_shot_rate, _RED), md=3),
+            dbc.Col(make_progress_bar("Zone 14 Access Allowed", z14_allowed, _BLUE), md=3),
+        ]),
+    ])
+
+    return html.Div([
+        principles,
+        html.Div(style={"maxWidth": "1180px", "margin": "0 auto"}, children=[
+            priority_cards,
+            detail_cards,
+        ]),
+    ])
+
+
 def _build_tab_content(active_tab, stats, opp_name, opponent):
+    if active_tab == 'game-plan-tab':
+        return _build_game_plan_content(stats, opp_name, opponent)
+
     if active_tab == 'offensive-tab':
         buildup_coords = stats['buildup'].get('coords', [])
         b_plot_b64 = _build_buildup_pitch(buildup_coords)
@@ -1908,7 +2089,7 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         opp_danger_pct = outcomes.get('opp_danger_pct', 0)
         
         # Goal sequences
-        goals = stats.get('goal_sequences', [])
+        stats.get('goal_sequences', [])
         
         # Calculate preferred attacking/buildup flank
         buildup_zones = stats['buildup'].get('zone', {})
@@ -1995,7 +2176,7 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         except Exception:
             league_df = pd.DataFrame()
 
-        n_teams = len(league_df) if not league_df.empty else 18
+        len(league_df) if not league_df.empty else 18
         if not league_df.empty and opponent in league_df.index:
             s_f3 = league_df['buildup_f3_pct']
             f3_rank = int(s_f3.rank(ascending=False, method='min')[opponent])
@@ -2015,7 +2196,7 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
             make_progress_bar("Conceded Danger after Turnover (10s)", opp_danger_pct, "#a855f7"),
             html.Div(style={"marginTop": "10px", "padding": "9px", "borderRadius": "8px", "background": "rgba(255,255,255,0.02)", "border": "1px solid var(--border-color)", "fontSize": "0.68rem", "color": "var(--text-secondary)"}, children=[
                 html.Span("Vulnerability Warning: ", style={"color": _RED, "fontWeight": "700"}),
-                f"When losing the ball in buildup, they concede a Final Third entry or shot within 10 seconds in ",
+                "When losing the ball in buildup, they concede a Final Third entry or shot within 10 seconds in ",
                 html.Span(f"{opp_danger_pct}%", style={"color": "white", "fontWeight": "700"}), " of the sequences. High-press triggers should be initiated."
             ]),
             html.Div(id='pre-match-buildup-rank-container', style={"marginTop": "12px"},
@@ -2051,8 +2232,9 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
                             html.Label("SELECT GOAL TO INSPECT", className="goz-label", style={"fontSize": "0.68rem"}),
                             dcc.Dropdown(
                                 id='pre-match-goal-selector',
-                                className="goz-dropdown",
+                                className="goz-dropdown pre-match-goal-dropdown",
                                 clearable=False,
+                                optionHeight=38,
                             )
                         ], width=6)
                     ], style={"marginBottom": "15px"}),
@@ -2164,7 +2346,7 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
                           style={"fontSize": "1.1rem"}),
             ]),
             html.P(
-                f"Shows shot-producing regains only. Switch to goals to isolate the highest-value attacks.",
+                "Shows shot-producing regains only. Switch to goals to isolate the highest-value attacks.",
                 style={"fontSize": "0.74rem", "color": "var(--text-secondary)", "marginBottom": "14px"}
             ),
             dbc.RadioItems(
@@ -2256,7 +2438,7 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
                           style={"fontSize": "1.1rem"}),
             ]),
             html.P(
-                f"Shows losses that conceded a shot only. Switch to goals to isolate the most dangerous breakdowns.",
+                "Shows losses that conceded a shot only. Switch to goals to isolate the most dangerous breakdowns.",
                 style={"fontSize": "0.74rem", "color": "var(--text-secondary)", "marginBottom": "14px"}
             ),
             dbc.RadioItems(
@@ -2618,13 +2800,14 @@ def layout():
                 dbc.RadioItems(
                     id="pre-match-tabs",
                     options=[
+                        {"label": "📋 Game Plan",         "value": "game-plan-tab"},
                         {"label": "⚔️ Offensive",        "value": "offensive-tab"},
                         {"label": "🛡️ Defensive",        "value": "defensive-tab"},
                         {"label": "⚡ Off. Transitions",  "value": "off-trans-tab"},
                         {"label": "🔄 Def. Transitions",  "value": "def-trans-tab"},
                         {"label": "🎯 Set Pieces",        "value": "set-pieces-tab"},
                     ],
-                    value="offensive-tab",
+                    value="game-plan-tab",
                     inline=True,
                     className="pm-tab-radio-group",
                     inputClassName="pm-tab-radio-input",
@@ -2972,7 +3155,7 @@ def find_next_save_event_for_shot(shot_row: pd.Series, df: pd.DataFrame) -> pd.S
 
 
 def compute_shot_end_coordinates_default(row):
-    x0 = float(row.get("x_plot_m", np.nan))
+    float(row.get("x_plot_m", np.nan))
     y0 = float(row.get("y_plot_m", np.nan))
 
     x_end = row.get("pass_end_x_plot_m", np.nan)
@@ -3934,7 +4117,7 @@ def update_goal_selector_options(opponent, origin_filter):
         
     options = []
     for g in goals:
-        label = f"{g['minute']}' - {g['player']} (vs {g['opponent']})"
+        label = f"{g['minute']}' - {g['player']}"
         value = f"{g['filename']}|{g['event_id']}|{g['player']}|{g['minute']}"
         options.append({'label': label, 'value': value})
         
@@ -4018,11 +4201,14 @@ def update_goal_list(opponent, origin_filter):
     
     for g in goals:
         origin_type = g.get('origin', 'open_play')
+        goal_value = f"{g['filename']}|{g['event_id']}|{g['player']}|{g['minute']}"
         
-        goal_rows.append(html.Div(style={
+        goal_rows.append(html.Div(id={'type': 'pre-match-goal-row', 'value': goal_value}, n_clicks=0, className='pre-match-goal-row', style={
             "display": "flex", "alignItems": "center", "gap": "10px",
             "padding": "10px 14px", "borderRadius": "10px", "marginBottom": "8px",
-            "background": "rgba(255,255,255,0.03)", "border": "1px solid var(--border-color)"
+            "background": "rgba(255,255,255,0.03)", "border": "1px solid var(--border-color)",
+            "cursor": "pointer",
+            "transition": "border-color 0.2s, background 0.2s",
         }, children=[
             html.Div(style={"width": "36px", "height": "36px", "borderRadius": "50%",
                             "background": "rgba(251,191,36,0.1)", "display": "flex",
@@ -4041,7 +4227,26 @@ def update_goal_list(opponent, origin_filter):
             }, children=origin_labels.get(origin_type, 'Open Play'))
         ]))
         
-    return html.Div(goal_rows)
+    return html.Div([
+        html.Div("Click a goal below, or select one from the dropdown, to inspect its full sequence.", style={
+            "fontSize": "0.68rem",
+            "color": "var(--text-secondary)",
+            "marginBottom": "8px",
+        }),
+        *goal_rows,
+    ])
+
+
+@callback(
+    Output('pre-match-goal-selector', 'value', allow_duplicate=True),
+    Input({'type': 'pre-match-goal-row', 'value': ALL}, 'n_clicks'),
+    prevent_initial_call=True,
+)
+def select_goal_from_list(_clicks):
+    triggered = ctx.triggered_id
+    if isinstance(triggered, dict):
+        return triggered.get('value')
+    return dash.no_update
 
 
 # ──────────────────────────────────────────────────────────────

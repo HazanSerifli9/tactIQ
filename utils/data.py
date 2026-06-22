@@ -1,7 +1,6 @@
 
 import pandas as pd
 import os
-import json
 import math
 
 from shared.logger import get_logger

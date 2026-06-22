@@ -1,9 +1,8 @@
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import dash
-from dash import html, dcc, dash_table
+from dash import html, dcc
 from dash.dependencies import Input, Output
 import os
 
@@ -100,14 +99,12 @@ def build_timeline(turnover_row, df):
 
 
 
-    found_end = False
 
     for _, row in subset.iterrows():
         if row['team_name'] != turnover_row['team_name']:
             evt = row['event']
             if evt in ['Goal', 'Miss', 'Post', 'Attempt Saved']:
                 timeline_rows.append(row)
-                found_end = True
                 break
 
         timeline_rows.append(row)
@@ -142,7 +139,7 @@ def build_timeline(turnover_row, df):
     df_timeline.loc[mask_pass, 'ball_end_x'] = df_timeline.loc[mask_pass, 'pass_end_x_plot_m']
     df_timeline.loc[mask_pass, 'ball_end_y'] = df_timeline.loc[mask_pass, 'pass_end_y_plot_m']
 
-    mask_shot = df_timeline['event'].isin(['Goal', 'Miss', 'Post', 'Attempt Saved'])
+    df_timeline['event'].isin(['Goal', 'Miss', 'Post', 'Attempt Saved'])
 
 
 
@@ -253,7 +250,7 @@ layout = html.Div([
 )
 def update_animation(turnover_idx, n_intervals, play_clicks, reset_clicks):
     ctx = dash.callback_context
-    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+    ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
 
 
 

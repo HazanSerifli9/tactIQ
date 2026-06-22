@@ -63,7 +63,7 @@ def analyze_goal_kicks(df, team_name):
          gk_events['length'] = 0
          
     long_gks = gk_events[gk_events['length'] > 40]
-    short_gks = gk_events[gk_events['length'] <= 40]
+    gk_events[gk_events['length'] <= 40]
     
     long_pct = round((len(long_gks) / len(gk_events)) * 100, 1)
     
@@ -167,55 +167,3 @@ def analyze_final_third_entries(df, team_name):
         "carry_count": carry_count,
         "zones": zones
     }
-
-def analyze_chance_creation(df, team_name):
-    """
-    Analyzes Key Passes (passes leading to shots).
-    Types: Cross, Cutback, Throughball.
-    """
-    df_team = df[df['team_name'] == team_name].copy()
-    
-    # Identify Key Passes
-    # Pass where next event is Shot by same team
-    # Or 'qualifier' KeyPass?
-    
-    key_passes = []
-    
-    # Using index scan for reliability
-    if not isinstance(df_team.index, pd.RangeIndex):
-         df_team = df_team.reset_index(drop=True)
-         
-    shot_indices = df_team[df_team['event'].isin(['Shot', 'Goal', 'Miss', 'Post', 'Attempt Saved'])].index
-    
-    kp_counts = {"Cross": 0, "Cutback": 0, "Throughball": 0, "Other": 0}
-    
-    for idx in shot_indices:
-        if idx > 0:
-            prev_ev = df_team.loc[idx-1]
-            if prev_ev['event'] == 'Pass':
-                kp = prev_ev
-                # Categorize
-                is_cross = False
-                
-                # Check qualifiers/text
-                quals = [str(c) for c in kp.values if isinstance(c, str)]
-                full_text = " ".join(quals).lower()
-                
-                if 'cross' in full_text:
-                    kp_counts['Cross'] += 1
-                    is_cross = True
-                elif 'through' in full_text: # through ball
-                    kp_counts['Throughball'] += 1
-                else:
-                    # Cutback logic: Pass from near byline (x > 83) and y outside box (y < 21 or y > 79)? 
-                    # Actually Cutback is usually from deep wide area BACKWARDS to box center.
-                    # Pass End X < Start X. Start X > 90.
-                    start_x = kp.get('x', 0)
-                    end_x = kp.get('Pass End X', kp.get('end_x', 100))
-                    
-                    if start_x > 90 and end_x < start_x:
-                        kp_counts['Cutback'] += 1
-                    else:
-                        kp_counts['Other'] += 1
-                        
-    return kp_counts

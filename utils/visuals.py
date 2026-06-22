@@ -102,7 +102,7 @@ def plot_convex_hulls(df, team_name):
                 
     return fig_to_base64(fig)
 
-# type_id'ler: sahada gerçek konum içermeyen, ortalama pozisyonu bozan event'ler
+# type_ids: events that don't carry a real on-pitch position and distort averages
 _NON_POSITIONAL_TYPE_IDS = {
     5,   # Out
     17,  # Card
@@ -118,9 +118,9 @@ _NON_POSITIONAL_TYPE_IDS = {
 }
 
 def filter_position_events(df):
-    """Sahada gerçek konum bilgisi taşıyan eventleri döndürür.
-    Out eventlerinin saha dışı koordinatlarını (x>100, x<0 vb.) ve
-    (0,0) konumuna düşen sahaya özgü olmayan eventleri filtreler.
+    """Return events that carry real on-pitch position information.
+    Filters out-of-bounds coordinates of Out events (x>100, x<0, etc.) and
+    non-positional events that fall at (0,0).
     """
     mask = (
         df['x'].between(0, 100, inclusive='both') &
@@ -239,7 +239,7 @@ def plot_transition_risk_map(df, team_name, filter_type='All'):
     # Only show heatmap if 'All' or if we want density of specific events
     # Let's keep general heatmap for context
     try:
-        kde = pitch.kdeplot(turnovers.x, turnovers.y, ax=ax, fill=True, levels=100, thresh=0.05, cut=4, cmap='Reds', alpha=0.4)
+        pitch.kdeplot(turnovers.x, turnovers.y, ax=ax, fill=True, levels=100, thresh=0.05, cut=4, cmap='Reds', alpha=0.4)
     except Exception as e:
         logger.debug("KDE plot skipped (not enough data): %s", e)
 
@@ -747,7 +747,7 @@ def preprocess_for_network(df):
     df['shortName'] = df['player_name'].apply(get_short_name)
     df['shorter name'] = df['player_name'].apply(get_shorter_name)
 
-    # Saha dışı / pozisyonsuz eventleri filtrele
+    # Filter out off-pitch / non-positional events
     df = filter_position_events(df)
 
     # Rescale to StatsBomb (120x80) from assumed Opta (100x100)
@@ -956,7 +956,7 @@ def plot_defensive_block(df, team_name):
     # Heatmap
     flamingo_cmap = LinearSegmentedColormap.from_list("Flamingo - 100 colors", [TACTIQ_BG, TACTIQ_HOME], N=500)
     try:
-        kde = pitch.kdeplot(defensive_actions_df.x_scaled, defensive_actions_df.y_scaled, ax=ax, fill=True, levels=100, thresh=0.02, cut=4, cmap=flamingo_cmap)
+        pitch.kdeplot(defensive_actions_df.x_scaled, defensive_actions_df.y_scaled, ax=ax, fill=True, levels=100, thresh=0.02, cut=4, cmap=flamingo_cmap)
     except Exception as e:
         logger.debug("Defensive KDE skipped (not enough data): %s", e)
 
@@ -1005,7 +1005,6 @@ def plot_defensive_profile(df, team_name):
     Comprehensive defensive profile — distinct from Out-of-Possession avg positions.
     Shows: block classification, compactness ellipse, 1H vs 2H shift, action breakdown.
     """
-    from matplotlib.patches import Ellipse
 
     df_processed = preprocess_for_network(df)
 
@@ -1313,7 +1312,7 @@ def plot_progressive_pass_map(df, team_name):
     """
     from mplsoccer import Pitch as MplPitch
     from matplotlib import gridspec
-    from matplotlib.patches import Patch, FancyBboxPatch
+    from matplotlib.patches import Patch
 
     df = preprocess_for_network(df)
 
@@ -1466,7 +1465,6 @@ def plot_progressive_pass_map(df, team_name):
 
     return fig_to_base64(fig)
 
-from highlight_text import ax_text
 
 
 def plot_pressing_map(df, team_name):
@@ -1480,8 +1478,6 @@ def plot_pressing_map(df, team_name):
     from mplsoccer import Pitch as MplPitch
     from matplotlib import gridspec
     from matplotlib.lines import Line2D
-    from matplotlib.patches import Rectangle
-    import matplotlib.patheffects as path_effects
     import numpy as np
 
     df = preprocess_for_network(df)
@@ -2588,7 +2584,7 @@ def plot_zone14_halfspace_passes(df, team_name):
     # Text Counters (Hexagon markers as bg)
     # User coords: 24, 24/56.
     
-    path_eff = [path_effects.Stroke(linewidth=3, foreground=bg_color), path_effects.Normal()]
+    [path_effects.Stroke(linewidth=3, foreground=bg_color), path_effects.Normal()]
     
     # Half Space Count
     ax.scatter(24, 24, color=col, s=15000, edgecolor=line_color, linewidth=2, alpha=1, marker='h')
@@ -3658,7 +3654,6 @@ def plot_match_timeline(df, home_team, away_team):
     hcol = TACTIQ_HOME
     acol = TACTIQ_AWAY
     
-    events = []
     
     # Filter DF for events
     if 'event' in df.columns:
@@ -3692,16 +3687,13 @@ def plot_match_timeline(df, home_team, away_team):
         # Y Offset: Home Top (+1), Away Bottom (-1)
         y_pos = 0.5 if team == home_team else -0.5
         color = hcol if team == home_team else acol
-        va = 'bottom' if team == home_team else 'top'
         
         # Marker & Icon
         if event_type == 'Goal':
              # Check Own Goal
-             is_og = False
              if 'qualifiers' in row and 'OwnGoal' in str(row['qualifiers']): # simplified check
-                 is_og = True
+                 pass
              
-             marker = 'football'
              # Scatter
              ax.scatter(minute, 0, s=200, marker='o', color=color, edgecolors=TACTIQ_FG, zorder=3)
              # Text
@@ -3857,7 +3849,7 @@ def plot_phase_radar(phases_data_home, phases_data_away, home_team, away_team):
     for text in legend.get_texts():
         text.set_color("white")
         
-    ax.set_title(f"Tactical Phase Comparison", color='white', size=14, pad=20, fontweight='bold')
+    ax.set_title("Tactical Phase Comparison", color='white', size=14, pad=20, fontweight='bold')
     
     return fig_to_base64(fig)
 
@@ -4390,7 +4382,7 @@ def plot_goal_kicks_distribution(df, team_name):
     short_outside = t_gk[(t_gk['end_x_scaled'] <= 40) & ~t_gk.index.isin(in_box.index)]
     
     # 3. Long: end_x_scaled > 40
-    long_gk = t_gk[t_gk['end_x_scaled'] > 40]
+    t_gk[t_gk['end_x_scaled'] > 40]
     
     box_pct = round((len(in_box) / total_gk) * 100) if total_gk else 0
     short_pct = round((len(short_outside) / total_gk) * 100) if total_gk else 0
@@ -4398,7 +4390,7 @@ def plot_goal_kicks_distribution(df, team_name):
     
     left_gk = t_gk[t_gk['end_y_scaled'] < 26.67]
     right_gk = t_gk[t_gk['end_y_scaled'] > 53.33]
-    center_gk = t_gk[t_gk['end_y_scaled'].between(26.67, 53.33)]
+    t_gk[t_gk['end_y_scaled'].between(26.67, 53.33)]
     
     left_pct = round((len(left_gk) / total_gk) * 100) if total_gk else 0
     right_pct = round((len(right_gk) / total_gk) * 100) if total_gk else 0
@@ -4460,7 +4452,6 @@ def plot_final_third_entries(df, team_name):
     """
     Visualizes entries into the final third.
     """
-    from utils.desc_analysis import analyze_final_third_entries
     # We just want visual, but utilizing shared logic is complex if we didn't export dataframe.
     # Let's re-implement simple visual filter here or modify `analyze_final_third_entries` to return df.
     # Re-implementing filter for visual simplicity.
@@ -4486,7 +4477,7 @@ def plot_final_third_entries(df, team_name):
     # We can approximate entry point interpolation, or just use End Points in Final Third.
     # Let's use End Points (where they receive in final third).
     
-    pitch = Pitch(pitch_type='opta', pitch_color=TACTIQ_BG, line_color=TACTIQ_FG)
+    Pitch(pitch_type='opta', pitch_color=TACTIQ_BG, line_color=TACTIQ_FG)
     
     end_xs = []
     end_ys = []
@@ -4638,7 +4629,6 @@ def plot_starting_xi(df, team_name):
     Connected by arrows; jersey numbers included.
     """
     from mplsoccer import VerticalPitch
-    import matplotlib.patches as mpatches
 
     # ── Event classification ─────────────────────────────────
     IN_POSS_EVENTS  = {'Pass', 'Take On', 'Shot', 'Miss', 'Goal', 'Attempt Saved',

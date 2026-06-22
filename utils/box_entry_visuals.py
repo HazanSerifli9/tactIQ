@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-from matplotlib.patches import FancyBboxPatch, Patch
+from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 from mplsoccer import VerticalPitch
 from PIL import Image

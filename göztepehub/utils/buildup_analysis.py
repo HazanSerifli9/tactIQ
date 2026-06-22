@@ -1,9 +1,6 @@
 
 import pandas as pd
-import numpy as np
-import os
 
-from utils.data import get_data_dir
 
 GOZTEPE = 'Göztepe Spor Kulübü'
 
@@ -598,50 +595,6 @@ def get_opponent_buildup_analysis(team_name):
 
     _BUILDUP_ANALYSIS_CACHE[team_name] = (match_analyses, season_summary)
     return match_analyses, season_summary
-
-def get_opponent_matches_list(team_name):
-    """
-    Returns a sorted list of available matches for an opponent (excluding Göztepe).
-    Format: [{'filename': str, 'week': int, 'opponent': str, 'description': str}, ...]
-    """
-    match_dfs = _load_opponent_matches(team_name)
-    
-    matches = []
-    for filename, df in match_dfs:
-        teams_in_match = df['team_name'].unique().tolist()
-        opponent = [t for t in teams_in_match if t != team_name]
-        opponent_name = opponent[0] if opponent else 'Unknown'
-        week = int(df['week'].iloc[0]) if 'week' in df.columns else 0
-        desc = str(df['description'].iloc[0]) if 'description' in df.columns else ''
-        
-        matches.append({
-            'filename': filename,
-            'week': week,
-            'opponent': opponent_name,
-            'description': desc,
-            'label': f"Week {week} vs {opponent_name}"
-        })
-        
-    # Sort by week
-    matches.sort(key=lambda x: x['week'])
-    return matches
-
-def get_single_match_buildups(filename, team_name):
-    """
-    Load a single match parquet file and return the build-up analysis.
-    """
-    data_dir = get_data_dir()
-    filepath = os.path.join(data_dir, filename)
-    
-    try:
-        df = pd.read_parquet(filepath)
-        result = analyze_buildup_for_match(df, team_name)
-        if result:
-            result['source_file'] = filename
-        return result
-    except Exception as e:
-        print(f"Error loading {filename}: {e}")
-        return None
 
 
 def _precompute_all_teams():

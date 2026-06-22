@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from pathlib import Path
 import os
 import glob
 import xgboost as xgb
@@ -124,7 +123,7 @@ def train_xg_model(data_dir):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     print("Training XGBoost Classifier...")
-    pos_weight = (len(y) - sum(y)) / max(sum(y), 1)
+    (len(y) - sum(y)) / max(sum(y), 1)
     
     model = xgb.XGBClassifier(
         n_estimators=100, 
@@ -142,7 +141,7 @@ def train_xg_model(data_dir):
         auc = roc_auc_score(y_test, preds_proba)
         brier = brier_score_loss(y_test, preds_proba)
         
-        print(f"Model Training Complete!")
+        print("Model Training Complete!")
         print(f"ROC-AUC: {auc:.4f} (Higher is better, >0.75 is good for xG)")
         print(f"Brier Score: {brier:.4f} (Lower is better)")
     except Exception as e:

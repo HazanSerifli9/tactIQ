@@ -2,14 +2,14 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from mplsoccer import Pitch, VerticalPitch
+from mplsoccer import Pitch
 import matplotlib.patheffects as path_effects
 import os
 import numpy as np
 import io
 import base64
 from PIL import Image
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
@@ -199,16 +199,6 @@ def generate_team_ball_winning_plot(teams_list: Optional[List[str]] = None) -> O
 
     return _save_plot_to_base64(fig)
 
-def get_pass_direction(row, side_angle=30):
-    start_x, start_y = row['x'], row['y']
-    end_x, end_y = row.get('Pass End X'), row.get('Pass End Y')
-    if pd.isna(end_x) or pd.isna(end_y): return 'side'
-    dx = 120 * (end_x - start_x) 
-    dy = 80 * (end_y - start_y)
-    ang = np.degrees(np.arctan2(dx, dy))
-    if (ang > side_angle) and (ang < 180 - side_angle): return 'fwd'
-    elif (ang > -180 + side_angle) and (ang < -side_angle): return 'back'
-    else: return 'side'
 
 @disk_cache
 def generate_team_common_zonal_actions_plot(teams_list: Optional[List[str]] = None) -> Optional[str]:
@@ -356,107 +346,6 @@ def generate_league_top_players_plot() -> Optional[str]:
     fig.text(0.5, 0.02, "Aggregated League-wide Player Performance | Powered by TactIQ", color='w', ha='center', fontsize=12, fontstyle='italic')
     return _save_plot_to_base64(fig)
 
-@disk_cache
-def generate_team_cross_success_plot(teams_list: Optional[List[str]] = None) -> Optional[str]:
-    events_df = load_all_events()
-    if events_df.empty: return None
-    full_df = events_df.copy()
-    if 'abs_time' not in full_df.columns:
-        if 'minute' in full_df.columns and 'second' in full_df.columns: full_df['abs_time'] = full_df['minute'] * 60 + full_df['second']
-        else: full_df = full_df.reset_index(); full_df['abs_time'] = full_df['index']
-    
-    is_cross = full_df['Cross'].isin(['Si', 1, '1', True]) if 'Cross' in full_df.columns else (full_df['event'] == 'Pass') & (abs(full_df['Pass End Y'] - full_df['y']) >= 10)
-    crosses = full_df[is_cross].copy()
-    
-    cross_outcomes = []
-    # Group full_df by match_id once to avoid scanning the entire dataframe repeatedly in the loop
-    match_groups = {m_id: m_df.sort_values('abs_time') for m_id, m_df in full_df.groupby('match_id')}
-    
-    # Group crosses by match
-    for match_id, match_crosses in crosses.groupby('match_id'):
-        match_full_df = match_groups.get(match_id)
-        if match_full_df is None or match_full_df.empty:
-            continue
-        times = match_full_df['abs_time'].values
-        events = match_full_df['event'].values.astype(str)
-        teams = match_full_df['team_name'].values.astype(str)
-        
-        for idx, cross in match_crosses.iterrows():
-            outcome = 'Unsuccessful'
-            cross_time = cross['abs_time']
-            cross_team = str(cross['team_name'])
-            
-            # Binary search for events within 5-second window
-            idx_start = np.searchsorted(times, cross_time, side='right')
-            idx_end = np.searchsorted(times, cross_time + 5, side='right')
-            
-            sub_events = events[idx_start:idx_end]
-            sub_teams = teams[idx_start:idx_end]
-            
-            # Filter by team
-            team_events = sub_events[sub_teams == cross_team]
-            
-            if np.any(np.isin(team_events, ['Goal'])):
-                outcome = 'Goal'
-            elif np.any(np.isin(team_events, ['Missed', 'Attempt Saved', 'SavedShot', 'Post', 'ShotOnPost'])):
-                outcome = 'Shot'
-            elif cross['outcome'] in [1, '1', 'Successful']:
-                outcome = 'To Team-mate'
-                
-            cross_outcomes.append((idx, outcome))
-            
-    # Map back to original crosses order
-    outcome_dict = dict(cross_outcomes)
-    crosses['cross_outcome'] = crosses.index.map(outcome_dict).fillna('Unsuccessful')
-            
-    teams = crosses['team_name'].unique()
-    if teams_list:
-        teams = [t for t in teams if t in teams_list]
-
-    team_stats = []
-    for team in teams:
-        team_crosses = crosses[crosses['team_name'] == team]
-        effective = team_crosses[team_crosses['cross_outcome'].isin(['Goal', 'Shot'])]
-        pct = (len(effective) / len(team_crosses) * 100) if not team_crosses.empty else 0
-        team_stats.append({'team': team, 'pct': pct, 'crosses': team_crosses, 'effective_count': len(effective)})
-    team_stats.sort(key=lambda x: x['pct'], reverse=True)
-    
-    nrows = int(np.ceil(len(team_stats)/4))
-    pitch = VerticalPitch(pitch_color=TACTIQ_BG, pitch_type='opta', line_color='white', linewidth=1, half=True, stripe=False)
-    fig, ax = pitch.grid(nrows=nrows, ncols=4, grid_height=0.8, title_height=0.1, endnote_height=0.04, space=0.1, axis=False)
-    fig.set_size_inches(14, 4 * nrows)
-    fig.set_facecolor(TACTIQ_BG)
-    axes_list = ax['pitch'].flatten()
-    
-    for idx, stats in enumerate(team_stats):
-        if idx >= len(axes_list): break
-        curr_ax = axes_list[idx]
-        t_crosses = stats['crosses']
-        for _, cross in t_crosses.iterrows():
-            col, alpha, z = 'grey', 0.2, 1
-            if cross['cross_outcome'] == 'Goal': col, alpha, z = 'yellow', 0.8, 4
-            elif cross['cross_outcome'] == 'Shot': col, alpha, z = 'lightseagreen', 0.7, 3
-            elif cross['cross_outcome'] == 'To Team-mate': col, alpha, z = '#a855f7', 0.4, 2 # Purple for Teammate
-            pitch.lines(cross['x'], cross['y'], cross['Pass End X'], cross['Pass End Y'], color=col, alpha=alpha, lw=1, zorder=z, ax=curr_ax)
-            if cross['cross_outcome'] in ['Goal', 'Shot']: pitch.scatter(cross['Pass End X'], cross['Pass End Y'], color=col, s=15, zorder=z+1, ax=curr_ax)
-        display_name = stats['team'][:15] + '...' if len(stats['team']) > 15 else stats['team']
-        curr_ax.set_title(f"{idx+1}: {display_name}", color='w', loc='left', fontsize=12)
-        curr_ax.text(2, 54, f"{stats['pct']:.1f}%", color="w", fontsize=10, ha="right", va="center")
-        _plot_logo(curr_ax, stats['team'])
-
-    for i in range(len(team_stats), len(axes_list)): axes_list[i].axis('off')
-    
-    fig.text(0.04, 0.965, "Süper Lig - Teams Ranked by In-Play Cross Effectiveness", fontweight="bold", fontsize=20, color='w')
-    
-    legend_elements = [
-        Line2D([0], [0], color='yellow', lw=3, label='Goal'),
-        Line2D([0], [0], color='lightseagreen', lw=3, label='Shot'),
-        Line2D([0], [0], color='#a855f7', lw=3, label='Teammate'),
-        Line2D([0], [0], color='grey', lw=3, label='Fail')
-    ]
-    fig.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(0.04, 0.945), ncol=4, frameon=False, labelcolor='w', fontsize=12, handlelength=1.5, columnspacing=2)
-
-    return _save_plot_to_base64(fig)
 
 @disk_cache
 def generate_team_threat_creation_plot(teams_list: Optional[List[str]] = None) -> Optional[str]:
@@ -528,185 +417,6 @@ def generate_team_threat_creation_plot(teams_list: Optional[List[str]] = None) -
         Patch(facecolor='#ffd166', edgecolor='none', label='High Threat'),
         Patch(facecolor='#06d6a0', edgecolor='none', label='Moderate Threat'),
         Patch(facecolor='#118ab2', edgecolor='none', label='Low Threat')
-    ]
-    fig.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(0.04, 0.945), ncol=3, frameon=False, labelcolor='w', fontsize=12, handlelength=1.5, columnspacing=2)
-    
-    return _save_plot_to_base64(fig)
-
-@disk_cache
-def generate_team_fullback_interplay_plot(teams_list: Optional[List[str]] = None) -> Optional[str]:
-    from utils.visuals import calculate_xt
-    events_df = load_all_events()
-    if events_df.empty: return None
-    
-    # Use a copy to avoid modifying the cached dataframe and causing fragmentation
-    events_df = events_df.copy()
-
-    
-    if 'minute' in events_df.columns and 'second' in events_df.columns: events_df['abs_time'] = events_df['minute'] * 60 + events_df['second']
-    else: events_df['abs_time'] = events_df.index
-    
-    fb_positions = ['DR', 'DL', 'DMR', 'DML', 'Right Back', 'Left Back', 'RWB', 'LWB']
-    def is_fb(pos): return any(p in str(pos) for p in fb_positions)
-    
-    events_df['next_pos'] = events_df['position'].shift(-1)
-    events_df['next_team'] = events_df['team_name'].shift(-1)
-    
-    fb_interplay_mask = ((events_df['event'] == 'Pass') & events_df['position'].apply(is_fb) & events_df['next_pos'].apply(is_fb) & (events_df['team_name'] == events_df['next_team']))
-    fb_passes = events_df[fb_interplay_mask].copy()
-    
-    leads_to_shot = []
-    for idx, row in fb_passes.iterrows():
-        following = events_df[(events_df['match_id'] == row['match_id']) & (events_df['abs_time'] > row['abs_time']) & (events_df['abs_time'] <= row['abs_time'] + 10) & (events_df['team_name'] == row['team_name'])]
-        leads_to_shot.append(any(following['event'].isin(['Goal', 'Missed', 'Attempt Saved', 'SavedShot'])))
-    fb_passes['leads_to_shot'] = leads_to_shot
-    
-    if 'player_name' in events_df.columns: events_df['playerName'] = events_df['player_name']
-    if 'event' in events_df.columns: events_df['typeId'] = events_df['event']
-    xt_full = calculate_xt(events_df)
-    if not xt_full.empty: fb_passes = fb_passes.merge(xt_full[['general_id', 'xT']], on='general_id', how='inner')
-    else: fb_passes['xT'] = 0
-    
-    team_stats = []
-    unique_teams = fb_passes['team_name'].unique()
-    if teams_list:
-        unique_teams = [t for t in unique_teams if t in teams_list]
-        
-    for team in unique_teams:
-        t_passes = fb_passes[fb_passes['team_name'] == team]
-        avg_xt = t_passes['xT'].sum() / events_df[events_df['team_name'] == team]['match_id'].nunique()
-        team_stats.append({'team': team, 'passes': t_passes, 'xt_match': avg_xt})
-    team_stats.sort(key=lambda x: x['xt_match'], reverse=True)
-    
-    nrows = int(np.ceil(len(team_stats)/4))
-    pitch = Pitch(pitch_color=TACTIQ_BG, pitch_type='opta', line_color='white', linewidth=1, stripe=False)
-    fig, ax = pitch.grid(nrows=nrows, ncols=4, grid_height=0.8, title_height=0.1, endnote_height=0.04, space=0.12, axis=False)
-    fig.set_size_inches(14, 4 * nrows)
-    fig.set_facecolor(TACTIQ_BG)
-    axes_list = ax['pitch'].flatten()
-    pass_cmap = plt.cm.get_cmap('viridis')
-    
-    for idx, stats in enumerate(team_stats):
-        if idx >= len(axes_list): break
-        curr_ax = axes_list[idx]
-        for _, p in stats['passes'].iterrows():
-            col, alpha = pass_cmap(min(p.get('xT',0)/0.05, 1.0)), 0.7
-            if p['leads_to_shot']: col, alpha = 'white', 0.9
-            pitch.lines(p['x'], p['y'], p['Pass End X'], p['Pass End Y'], color=col, alpha=alpha, comet=True, lw=2, ax=curr_ax, zorder=2)
-            pitch.scatter(p['Pass End X'], p['Pass End Y'], color=col, s=20, ax=curr_ax, zorder=3)
-        
-        display_name = stats['team'][:15] + '...' if len(stats['team']) > 15 else stats['team']
-        curr_ax.set_title(f"{idx+1}: {display_name}", color='w', loc='left', fontsize=12)
-        curr_ax.text(2, 4, f"xT/match: {stats['xt_match']:.3f}", color='w', fontsize=8)
-        _plot_logo(curr_ax, stats['team'])
-
-    for i in range(len(team_stats), len(axes_list)): axes_list[i].axis('off')
-    
-    for i in range(len(team_stats), len(axes_list)): axes_list[i].axis('off')
-    
-    fig.text(0.05, 0.95, "Süper Lig - Threat Generated through Full Back Interplay", fontweight="bold", fontsize=20, color='w')
-    fig.text(0.05, 0.91, "Legend: White/Bright = Shot Assist | Darker = Prep Pass", color='white', fontsize=10)
-    return _save_plot_to_base64(fig)
-
-
-@disk_cache
-def generate_team_setpiece_concession_plot(teams_list: Optional[List[str]] = None) -> Optional[str]:
-    """Generates 4-col grid of Team Defending against Set Pieces (Conceded Shots/xG)."""
-    events_df = load_all_events()
-    if events_df.empty: return None
-    
-    # Logic: Identify Shots conceded by Team X that were from Set Pieces
-    # Using specific columns: 'From corner', 'Direct free', 'Set piece' if they exist, or 'Corner taken' events
-    
-    teams = events_df['team_name'].dropna().unique()
-    if teams_list:
-        teams = [t for t in teams if t in teams_list]
-
-    team_stats = []
-    
-    pitch = Pitch(pitch_color=TACTIQ_BG, pitch_type='opta', line_color='white', linewidth=1, stripe=False)
-    
-    # helper to check if col exists and is true-ish
-    def is_true(df, col):
-        if col not in df.columns: return pd.Series(False, index=df.index)
-        return df[col].astype(str).isin(['1', '1.0', 'True', 'true', 'Si'])
-
-    for team in teams:
-        # We need OPPONENT shots that are from set pieces
-        # Filter for shots against this team
-        
-        # Identify match IDs where this team played
-        team_matches = events_df[events_df['team_name'] == team]['match_id'].unique()
-        
-        # Get all events from these matches
-        matches_df = events_df[events_df['match_id'].isin(team_matches)]
-        
-        # Opponent events (not this team)
-        opp_df = matches_df[matches_df['team_name'] != team]
-        
-        # Filter for Shots
-        shot_types = ['Goal', 'Miss', 'Attempt Saved', 'SavedShot', 'Post', 'Missed']
-        # Also check type_id if event names differ (e.g. 13, 14, 15, 16)
-        
-        is_shot = opp_df['event'].isin(shot_types) | opp_df['type_id'].isin([13, 14, 15, 16])
-        shots_df = opp_df[is_shot].copy()
-        
-        # Filter for Set Piece Origin
-        # Logic: Shot has 'From corner' OR 'Direct free' OR 'Set piece' (indirect)
-        # OR Preceded by Corner Awarded/Taken? 
-        # The columns 'From corner', 'Set piece', 'Direct free', 'Penalty' usually allow direct filtering on the shot event.
-        
-        from_corner = is_true(shots_df, 'From corner')
-        direct_free = is_true(shots_df, 'Direct free')
-        set_piece = is_true(shots_df, 'Set piece')
-        penalty = is_true(shots_df, 'Penalty')
-        
-        # We want Indirect Set Pieces (Corners, Indirect Free Kicks). Direct Free Kicks maybe too? 
-        # User said "Indirect Set Pieces". Usually means Corners + Free Kicks (delivered).
-        # 'Set piece' column often implies Indirect Free Kick or Throw-in setup. 
-        # 'From corner' is explicit.
-        # Direct Free Kicks are shots themselves.
-        # Let's include From Corner and Set Piece. Exclude Penalty.
-        
-        sp_shots = shots_df[from_corner | set_piece | direct_free] # Including direct free kicks as "Set Piece defending"
-        
-        if not sp_shots.empty:
-            team_stats.append({'team': team, 'shots': sp_shots, 'count': len(sp_shots)})
-        else:
-             team_stats.append({'team': team, 'shots': pd.DataFrame(), 'count': 0})
-
-    team_stats.sort(key=lambda x: x['count'], reverse=True)
-
-    nrows = int(np.ceil(len(team_stats)/4))
-    fig, ax = pitch.grid(nrows=nrows, ncols=4, grid_height=0.8, title_height=0.1, endnote_height=0.04, space=0.12, axis=False)
-    fig.set_size_inches(14, 4 * nrows)
-    fig.set_facecolor(TACTIQ_BG)
-    axes_list = ax['pitch'].flatten()
-    
-    for idx, stats in enumerate(team_stats):
-        if idx >= len(axes_list): break
-        curr_ax = axes_list[idx]
-        
-        shots = stats['shots']
-        if not shots.empty:
-            kde = pitch.kdeplot(shots['x'], shots['y'], ax=curr_ax, cmap='Reds', fill=True, levels=10, alpha=0.6)
-            pitch.scatter(shots['x'], shots['y'], c='red', s=20, ax=curr_ax, alpha=0.8)
-            
-        display_name = stats['team'][:15] + '...' if len(stats['team']) > 15 else stats['team']
-        curr_ax.set_title(f"{idx+1}: {display_name}", color='w', loc='left', fontsize=12)
-        curr_ax.text(2, 4, f"Conc: {stats['count']}", color='w', fontsize=10)
-        _plot_logo(curr_ax, stats['team'])
-
-    for i in range(len(team_stats), len(axes_list)): axes_list[i].axis('off')
-    
-    for i in range(len(team_stats), len(axes_list)): axes_list[i].axis('off')
-    
-    fig.text(0.04, 0.965, "Süper Lig - Shots Conceded from Indirect Set Pieces", fontweight="bold", fontsize=20, color='w')
-    
-    legend_elements = [
-        Patch(facecolor='#800026', edgecolor='none', label='High Density'), # Dark Red
-        Patch(facecolor='#fc4e2a', edgecolor='none', label='Moderate Density'), # Mid Red
-        Patch(facecolor='#ffeda0', edgecolor='none', label='Low Density') # Light Red/Yellow
     ]
     fig.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(0.04, 0.945), ncol=3, frameon=False, labelcolor='w', fontsize=12, handlelength=1.5, columnspacing=2)
     

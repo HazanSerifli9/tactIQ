@@ -26,7 +26,7 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, brier_score_loss
-from typing import Tuple, List, Dict, Any
+from typing import Tuple, List, Dict
 
 from utils.possession_engine import extract_all_possession_chains, PossessionChain
 
@@ -381,51 +381,3 @@ def calculate_obv(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------------------------------------------------
 # Player Summary Stats
 # -----------------------------------------------------------------------
-
-def get_player_obv_summary(df: pd.DataFrame, team_name: str) -> pd.DataFrame:
-    """
-    Returns a per-player OBV summary for a team from an annotated match df.
-
-    Columns: Player, OBV_Net, OBV_Pass, OBV_Carry, OBV_Def, Events
-    """
-    if 'obv_net' not in df.columns:
-        df = calculate_obv(df)
-
-    team_df = df[df['team_name'] == team_name].copy()
-    if team_df.empty:
-        return pd.DataFrame()
-
-    team_df['is_pass'   ] = team_df['event'] == PASS_LABEL
-    team_df['is_carry'  ] = team_df['event'] == CARRY_LABEL
-    team_df['is_def'    ] = team_df['event'].isin(DEF_LABELS)
-
-    group = team_df.groupby('player_name')
-
-    summary = pd.DataFrame({
-        'OBV_Net'  : group['obv_net'].sum(),
-        'OBV_Pass' : team_df[team_df['is_pass' ]].groupby('player_name')['obv_net'].sum(),
-        'OBV_Carry': team_df[team_df['is_carry' ]].groupby('player_name')['obv_net'].sum(),
-        'OBV_Def'  : team_df[team_df['is_def'  ]].groupby('player_name')['obv_net'].sum(),
-        'Events'   : group['obv_net'].count(),
-    }).reset_index()
-
-    summary.rename(columns={'player_name': 'Player'}, inplace=True)
-    summary = summary.fillna(0).sort_values('OBV_Net', ascending=False)
-    summary['OBV_Net']   = summary['OBV_Net'].round(3)
-    summary['OBV_Pass']  = summary['OBV_Pass'].round(3)
-    summary['OBV_Carry'] = summary['OBV_Carry'].round(3)
-    summary['OBV_Def']   = summary['OBV_Def'].round(3)
-
-    return summary.reset_index(drop=True)
-
-
-# -----------------------------------------------------------------------
-# Entry point — train models
-# -----------------------------------------------------------------------
-
-if __name__ == '__main__':
-    import sys
-    data_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), 'raw_data'
-    )
-    train_obv_models(data_dir)

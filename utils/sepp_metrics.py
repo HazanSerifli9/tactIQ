@@ -16,8 +16,8 @@ Metrics:
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple
-from utils.possession_engine import extract_possession_chains, PossessionChain
+from typing import Dict, Any
+from utils.possession_engine import extract_possession_chains
 
 
 def _is_progressive_pass(ev: dict) -> bool:

@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 
 # Karun Singh's xT Grid (12x8)
 # Source: https://karun.in/blog/expected-threat.html

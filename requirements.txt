@@ -1,8 +1,14 @@
 dash
 dash-bootstrap-components
+plotly
 pandas
-matplotlib
-mplsoccer
 numpy
+scipy
+scikit-learn
+xgboost
+matplotlib
+seaborn
+mplsoccer
+highlight-text
 Pillow
 pyarrow

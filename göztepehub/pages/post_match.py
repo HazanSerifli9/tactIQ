@@ -616,7 +616,7 @@ def _build_coaching_status_section(metrics, opp_name, as_card=True):
     return html.Div(className="goz-form-section", style={"marginBottom": "24px"}, children=content)
 
 
-def _build_h2h_section(rival, opp_name, active_tab, selected_file=None):
+def _build_h2h_section(rival, opp_name, active_tab, selected_file=None, transition_filter='all'):
     h2h = _get_h2h_matches(rival)
     if selected_file:
         h2h = [(fn, df) for fn, df in h2h if fn == selected_file]
@@ -652,10 +652,10 @@ def _build_h2h_section(rival, opp_name, active_tab, selected_file=None):
         o_succ = len(opp_df[(opp_df['type_id'] == 1) & (opp_df['outcome'] == 1)])
         g_acc = round(g_succ / max(g_passes, 1) * 100, 1)
         o_acc = round(o_succ / max(o_passes, 1) * 100, 1)
-        g_fouls = len(goz_df[goz_df['type_id'] == 4])
-        o_fouls = len(opp_df[opp_df['type_id'] == 4])
-        g_corners = _count_corner_deliveries(goz_df)
-        o_corners = _count_corner_deliveries(opp_df)
+        len(goz_df[goz_df['type_id'] == 4])
+        len(opp_df[opp_df['type_id'] == 4])
+        _count_corner_deliveries(goz_df)
+        _count_corner_deliveries(opp_df)
         g_xg = round(goz_df['xG'].sum(), 2) if 'xG' in goz_df.columns else 0
         o_xg = round(opp_df['xG'].sum(), 2) if 'xG' in opp_df.columns else 0
 
@@ -663,7 +663,6 @@ def _build_h2h_section(rival, opp_name, active_tab, selected_file=None):
         opp_passes_their_half = len(opp_df[(opp_df['type_id'] == 1) & (opp_df['x'] < 50)])
         goz_press = len(goz_df[goz_df['type_id'].isin([7, 8, 4]) & (goz_df['x'] > 50)])
         ppda = round(opp_passes_their_half / max(goz_press, 1), 1)
-        ppda_color = "#22c55e" if ppda < 8 else GOLD if ppda < 13 else RED
 
         # Box Entries
         has_pe = 'Pass End X' in goz_df.columns and 'Pass End Y' in goz_df.columns
@@ -837,7 +836,7 @@ def _build_h2h_section(rival, opp_name, active_tab, selected_file=None):
             try:
                 from pages.rival_scout import _build_off_transitions as _build_rival_off_transitions
                 tab_widgets = [
-                    _build_rival_off_transitions([(fn, df)], GOZTEPE, goz_short)
+                    _build_rival_off_transitions([(fn, df)], GOZTEPE, goz_short, transition_filter)
                 ]
             except Exception as e:
                 tab_widgets = [
@@ -848,86 +847,18 @@ def _build_h2h_section(rival, opp_name, active_tab, selected_file=None):
                 ]
 
         elif active_tab == "def-trans-tab":
-            # Fatigue curve
-            windows = [('0-15', 0, 15), ('15-30', 15, 30), ('30-45', 30, 45),
-                       ('45-60', 45, 60), ('60-75', 60, 75), ('75+', 75, 200)]
-            f_labels, f_acc = [], []
-            for lbl, s, e in windows:
-                w = goz_df[(goz_df['time_min'] >= s) & (goz_df['time_min'] < e) & (goz_df['type_id'] == 1)]
-                acc = round(len(w[w['outcome'] == 1]) / max(len(w), 1) * 100, 1)
-                f_labels.append(lbl); f_acc.append(acc)
-
-            baseline = f_acc[0] if f_acc[0] > 0 else 75
-            f_colors = [GOLD if a >= baseline - 4 else RED for a in f_acc]
-            fig_fat = go.Figure(go.Bar(
-                x=f_labels, y=f_acc, marker_color=f_colors,
-                text=[f"{a}%" for a in f_acc], textposition='outside',
-                textfont=dict(color='white', size=9),
-            ))
-            fig_fat.update_layout(
-                plot_bgcolor=PITCH_BG, paper_bgcolor='rgba(0,0,0,0)',
-                margin=dict(l=5, r=5, t=15, b=25), height=175,
-                xaxis=dict(showgrid=False, tickfont=dict(color='rgba(255,255,255,0.55)', size=8)),
-                yaxis=dict(range=[0, 115], showgrid=False, visible=False),
-            )
-
-            # Ball loss map
-            losses = goz_df[
-                ((goz_df['type_id'] == 1) & (goz_df['outcome'] == 0)) |
-                (goz_df['type_id'] == 50)
-            ][['x', 'y']].dropna()
-
-            pitch_l, fig_l, ax_l = _make_mplsoccer_pitch()
-            if not losses.empty:
-                safe = losses[losses['x'] >= 50]
-                risky = losses[losses['x'] < 50]
-                if not safe.empty:
-                    pitch_l.scatter(safe['x'].values, safe['y'].values,
-                                    s=28, color=GOLD, alpha=0.45, ax=ax_l, edgecolors='none')
-                if not risky.empty:
-                    pitch_l.scatter(risky['x'].values, risky['y'].values,
-                                    s=40, color=RED, alpha=0.8, ax=ax_l,
-                                    edgecolors='white', linewidth=0.4, label='High-risk loss')
-            _mpl_legend(ax_l)
-            loss_map_b64 = _fig_to_base64(fig_l)
-
-            # Pass Distance Delta
-            def avg_dist(df, t0, t1):
-                if not has_pe:
-                    return 0.0
-                w = df[(df['type_id'] == 1) & (df['time_min'] >= t0) & (df['time_min'] < t1)].copy()
-                w = w[w['Pass End X'].notna() & w['Pass End Y'].notna()]
-                if w.empty:
-                    return 0.0
-                return round(np.sqrt((w['Pass End X'] - w['x'])**2 + (w['Pass End Y'] - w['y'])**2).mean(), 1)
-
-            d1h = avg_dist(goz_df, 0, 45)
-            d2h = avg_dist(goz_df, 45, 200)
-            d_delta = round(d2h - d1h, 1)
-            d_color = RED if d_delta > 5 else GOLD if d_delta > 0 else "#22c55e"
-
-            tab_widgets = [
-                html.Div(style={"display": "flex", "gap": "10px", "flexWrap": "wrap", "marginBottom": "18px"}, children=[
-                    _pill("Pass Dist Δ (2H−1H)", f"{'+' if d_delta >= 0 else ''}{d_delta}", d_color, "panic signal if rising"),
-                ]),
-                dbc.Row([
-                    dbc.Col([
-                        html.Div("BALL LOSSES", style={"fontSize": "0.63rem", "fontWeight": "700",
-                            "color": GOLD, "letterSpacing": "1px", "textAlign": "center", "marginBottom": "3px"}),
-                        html.Div("Red = own half (high-risk)", style={"fontSize": "0.58rem",
-                            "color": "rgba(255,255,255,0.3)", "textAlign": "center", "marginBottom": "5px"}),
-                        html.Img(src=loss_map_b64, style={"width": "100%", "borderRadius": "8px"}),
-                    ], md=6),
-                    dbc.Col([
-                        html.Div("FATIGUE CURVE — PASS ACCURACY", style={"fontSize": "0.63rem",
-                            "fontWeight": "700", "color": GOLD, "letterSpacing": "1px",
-                            "textAlign": "center", "marginBottom": "3px"}),
-                        html.Div("Drop after 60' = fitness / structure breakdown", style={"fontSize": "0.58rem",
-                            "color": "rgba(255,255,255,0.3)", "textAlign": "center", "marginBottom": "5px"}),
-                        dcc.Graph(figure=fig_fat, config={'displayModeBar': False}, style={'width': '100%'}),
-                    ], md=6),
-                ]),
-            ]
+            try:
+                from pages.rival_scout import _build_def_transitions as _build_rival_def_transitions
+                tab_widgets = [
+                    _build_rival_def_transitions([(fn, df)], GOZTEPE, goz_short, transition_filter)
+                ]
+            except Exception as e:
+                tab_widgets = [
+                    html.Div(className="goz-form-section", children=[
+                        html.Div("Defensive transition analysis could not be loaded", className="goz-card-title"),
+                        html.P(str(e), className="goz-card-desc"),
+                    ])
+                ]
 
         elif active_tab == "set-pieces-tab":
             try:
@@ -1264,7 +1195,7 @@ def _build_xg_timeline(goz_df, opp_df, goz_short, opp_name):
 
     fig = go.Figure()
 
-    for shots, color, label in [(goz_s, GOLD, f'Göztepe'), (opp_s, RED, opp_name)]:
+    for shots, color, label in [(goz_s, GOLD, 'Göztepe'), (opp_s, RED, opp_name)]:
         if shots.empty:
             continue
         last_xg = shots['cumxG'].iloc[-1]
@@ -1567,6 +1498,24 @@ def layout():
                         labelClassName="pm-tab-radio-label",
                     ),
                 ]),
+                html.Div(id="post-match-transition-filter-wrap", style={"display": "none"}, children=[
+                    dbc.RadioItems(
+                        id="post-match-transition-filter",
+                        options=[
+                            {"label": "All", "value": "all"},
+                            {"label": "Goals", "value": "goals"},
+                            {"label": "Shots", "value": "shots"},
+                            {"label": "F3", "value": "f3"},
+                            {"label": "Lost / Recovered", "value": "negative"},
+                            {"label": "Retained / Survived", "value": "safe"},
+                        ],
+                        value="all",
+                        inline=True,
+                        className="pm-tab-radio-group",
+                        inputClassName="pm-tab-radio-input",
+                        labelClassName="pm-tab-radio-label",
+                    ),
+                ]),
                 html.Div(id='post-match-h2h-container', style={"marginTop": "24px"}),
             ])
         ),
@@ -1593,13 +1542,24 @@ def update_post_match_options(rival):
 
 
 @callback(
+    Output('post-match-transition-filter-wrap', 'style'),
+    Input('post-match-tabs', 'value'),
+)
+def toggle_post_match_transition_filter(active_tab):
+    if active_tab in ('off-trans-tab', 'def-trans-tab'):
+        return {"display": "flex", "justifyContent": "center", "margin": "0 0 18px"}
+    return {"display": "none"}
+
+
+@callback(
     [Output('post-match-form-container', 'children'),
      Output('post-match-h2h-container', 'children')],
     [Input('post-match-rival-selector', 'value'),
      Input('post-match-match-selector', 'value'),
-     Input('post-match-tabs', 'value')],
+     Input('post-match-tabs', 'value'),
+     Input('post-match-transition-filter', 'value')],
 )
-def update_post_match(rival, selected_file, active_tab):
+def update_post_match(rival, selected_file, active_tab, transition_filter):
     if not rival:
         return [html.Div("Select an opponent", className="goz-card-desc")] * 2
     if not selected_file:
@@ -1608,14 +1568,14 @@ def update_post_match(rival, selected_file, active_tab):
     if not active_tab:
         active_tab = "checklist-tab"
 
-    cache_key = f"postmatch_{rival}_{selected_file}_{active_tab}_{int(time.time()//300)}"
+    cache_key = f"postmatch_{rival}_{selected_file}_{active_tab}_{transition_filter}_{int(time.time()//300)}"
     if cache_key in _POST_MATCH_CACHE:
         return _POST_MATCH_CACHE[cache_key]
 
     try:
         opp_name = _clean(rival)
         form = _build_form_section(rival, opp_name, selected_file)
-        h2h = _build_h2h_section(rival, opp_name, active_tab, selected_file)
+        h2h = _build_h2h_section(rival, opp_name, active_tab, selected_file, transition_filter)
         result = [form, h2h]
         _POST_MATCH_CACHE[cache_key] = result
         if len(_POST_MATCH_CACHE) > 10:

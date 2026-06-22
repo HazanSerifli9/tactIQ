@@ -20,7 +20,6 @@ Usage:
 """
 
 import os
-import re
 import pandas as pd
 import numpy as np
 from functools import lru_cache
@@ -288,18 +287,6 @@ def load_wyscout_team_averages() -> pd.DataFrame:
     df = pd.DataFrame(rows)
     logger.info("Wyscout team averages loaded: %d teams", len(df))
     return df
-
-
-def load_wyscout_match_level() -> pd.DataFrame:
-    """Return match-level Wyscout data for all teams concatenated."""
-    dfs = []
-    for team_name in WYSCOUT_TEAMS:
-        raw = _load_team_raw(team_name)
-        if not raw.empty:
-            dfs.append(raw)
-    if not dfs:
-        return pd.DataFrame()
-    return pd.concat(dfs, ignore_index=True)
 
 
 def get_wyscout_match_stats(home_team: str, away_team: str) -> dict:

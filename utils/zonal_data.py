@@ -1,6 +1,5 @@
 
 import pandas as pd
-import numpy as np
 import os
 from typing import List, Dict, Tuple, Any
 from utils.data import get_data_dir
@@ -110,7 +109,7 @@ def process_zonal_data(league: str = "Süper Lig", year: str = "2024", min_mins:
                 
                 zone_stats[key][p] = zone_stats[key].get(p, 0.0) + xt_val
                     
-        except Exception as e:
+        except Exception:
             # print(f"Error processing {filename}: {e}")
             continue
             
@@ -127,7 +126,6 @@ def process_zonal_data(league: str = "Süper Lig", year: str = "2024", min_mins:
             
             best_player = None
             best_val = -1.0
-            best_count = 0
             
             for p, xt_sum in stats.items():
                 mins = player_mins.get(p, 0)

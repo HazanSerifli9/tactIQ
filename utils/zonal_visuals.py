@@ -60,7 +60,7 @@ def generate_zonal_map(grid_data: List[Dict[str, Any]], rows: int = 5, cols: int
         
         parts = p.split()
         short_name = f"{parts[0][0]}. {parts[-1]}" if len(parts) > 1 else p
-        short_team = team.split(" ")[0][:3].upper()
+        team.split(" ")[0][:3].upper()
         
         # Adjust text positions to fit logo
         pitch.text(x_center, y_center+6, short_name, ax=ax, ha='center', va='center', color=TACTIQ_ACCENT, fontsize=9, fontweight='bold', zorder=3)

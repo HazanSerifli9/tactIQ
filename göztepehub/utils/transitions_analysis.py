@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import os
 
 from utils.data import get_data_dir
@@ -83,7 +82,7 @@ def extract_transitions_for_match(df, team_name):
             # Possession shifted!
             if current_team is not None:
                 # Analyze the shift
-                prev_row = game_df.iloc[possession_start_idx - 1] if possession_start_idx > 0 else None
+                game_df.iloc[possession_start_idx - 1] if possession_start_idx > 0 else None
                 end_row = game_df.iloc[i - 1]
                 end_event = end_row['event']
 
@@ -203,88 +202,3 @@ def _analyze_windows(df, transitions, active_team, is_attacking):
         tr['shot'] = shot
         tr['goal'] = goal
         tr['shot_coords'] = shot_coords
-
-
-def get_opponent_transition_profile(team_name):
-    """
-    Analyze transitions for an opponent across all their matches.
-    """
-    match_dfs = _load_opponent_matches(team_name)
-
-    if not match_dfs:
-        return None, None
-
-    all_att = []
-    all_def = []
-
-    for filename, df in match_dfs:
-        att, deff = extract_transitions_for_match(df, team_name)
-        if att or deff:
-            # Metadata
-            teams = df['team_name'].unique().tolist()
-            opponent = [t for t in teams if t != team_name]
-            opp_name = opponent[0] if opponent else 'Unknown'
-            week = int(df['week'].iloc[0]) if 'week' in df.columns else 0
-
-            for a in att:
-                a['match_week'] = week
-                a['match_opp'] = opp_name
-                a['filename'] = filename
-            for d in deff:
-                d['match_week'] = week
-                d['match_opp'] = opp_name
-                d['filename'] = filename
-
-            all_att.extend(att)
-            all_def.extend(deff)
-
-    # Aggregate Attacking Transitions (Recoveries)
-    att_profile = {}
-    if all_att:
-        att_profile['total'] = len(all_att)
-        att_profile['zones'] = {
-            'Defensive 3rd': sum(1 for x in all_att if x['zone'] == 'Defensive 3rd'),
-            'Middle 3rd': sum(1 for x in all_att if x['zone'] == 'Middle 3rd'),
-            'Final 3rd': sum(1 for x in all_att if x['zone'] == 'Final 3rd'),
-        }
-        att_profile['outcomes'] = {
-            'f3_entry': sum(1 for x in all_att if x['reached_f3']),
-            'shot': sum(1 for x in all_att if x['shot']),
-            'goal': sum(1 for x in all_att if x['goal']),
-        }
-        # Player rankings
-        players = {}
-        for a in all_att:
-            p = a['player']
-            players[p] = players.get(p, 0) + 1
-        
-        # Sort top 10
-        att_profile['top_players'] = sorted(players.items(), key=lambda item: item[1], reverse=True)[:10]
-        att_profile['coords'] = [{'x': a['recovery_x'], 'y': a['recovery_y']} for a in all_att]
-        att_profile['shot_coords'] = [sc for a in all_att for sc in a.get('shot_coords', [])]
-
-    # Aggregate Defensive Transitions (Losses)
-    def_profile = {}
-    if all_def:
-        def_profile['total'] = len(all_def)
-        def_profile['zones'] = {
-            'Defensive 3rd': sum(1 for x in all_def if x['zone'] == 'Defensive 3rd'),
-            'Middle 3rd': sum(1 for x in all_def if x['zone'] == 'Middle 3rd'),
-            'Final 3rd': sum(1 for x in all_def if x['zone'] == 'Final 3rd'),
-        }
-        def_profile['outcomes'] = {
-            'opp_f3_entry': sum(1 for x in all_def if x['reached_f3']),
-            'opp_shot': sum(1 for x in all_def if x['shot']),
-            'opp_goal': sum(1 for x in all_def if x['goal']),
-        }
-        # Player rankings for losing the ball
-        players = {}
-        for d in all_def:
-            p = d['player']
-            players[p] = players.get(p, 0) + 1
-        
-        def_profile['top_players'] = sorted(players.items(), key=lambda item: item[1], reverse=True)[:10]
-        def_profile['coords'] = [{'x': d['loss_x'], 'y': d['loss_y']} for d in all_def]
-        def_profile['shot_coords'] = [sc for d in all_def for sc in d.get('shot_coords', [])]
-
-    return att_profile, def_profile

@@ -4,7 +4,6 @@ import dash_bootstrap_components as dbc
 from utils.data import extract_fixture_data, calculate_standings
 from göztepehub.utils.why_we_lose import calc_why_we_lose
 import plotly.graph_objects as go
-import numpy as np
 
 dash.register_page(__name__, path='/trends', title='Göztepe Hub | Trends')
 
