@@ -1,5 +1,7 @@
 dash
 dash-bootstrap-components
+google-cloud-storage
+gunicorn
 plotly
 pandas
 numpy

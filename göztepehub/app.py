@@ -18,6 +18,7 @@ import dash_bootstrap_components as dbc
 
 FONT_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Oswald:wght@500;700&display=swap"
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
+TACTIQ_MAIN_URL = os.environ.get("TACTIQ_MAIN_URL", "http://127.0.0.1:8050/")
 
 app = Dash(
     __name__,
@@ -35,7 +36,7 @@ def navbar():
     brand = html.A([
         html.Img(src="/assets/logo.png", className="tq-nav-logo"),
         html.Span("tactIQ", className="logo-text"),
-    ], href="http://127.0.0.1:8050/", className="d-flex align-items-center text-decoration-none")
+    ], href=TACTIQ_MAIN_URL, className="d-flex align-items-center text-decoration-none")
 
     links = html.Div([
         dcc.Link("Overview", href="/", className="nav-link custom-link highlight-link"),
