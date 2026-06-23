@@ -163,6 +163,20 @@
     letter-spacing: 0.2px;
 }
 
+.print-report-header {
+    display: none;
+}
+
+.report-only {
+    display: none;
+}
+
+.report-actions {
+    display: flex;
+    justify-content: center;
+    margin: 22px 0 0;
+}
+
 @media (max-width: 768px) {
     .pm-tab-toolbar {
         justify-content: flex-start;

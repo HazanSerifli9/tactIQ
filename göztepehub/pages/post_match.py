@@ -514,6 +514,144 @@ def _build_match_options(rival):
     return options
 
 
+def _build_post_match_report(rival, selected_file):
+    if not rival or not selected_file:
+        return html.Div()
+    matches = [(fn, df) for fn, df in _get_h2h_matches(rival) if fn == selected_file]
+    if not matches:
+        return html.Div()
+    _, df = matches[0]
+    opp_name = _clean(rival)
+    goz_df = df[df['team_name'] == GOZTEPE]
+    opp_df = df[df['team_name'] == rival]
+    match_label, gg, og = _ordered_match_label(df, rival)
+    week = int(df['week'].iloc[0]) if 'week' in df.columns and not df.empty else 0
+    goz_logo = TEAM_LOGOS.get(GOZTEPE, "assets/logo.png")
+    opp_logo = TEAM_LOGOS.get(rival, "assets/logo.png")
+    shot_types = [13, 14, 15, 16]
+    g_shots = len(goz_df[goz_df['type_id'].isin(shot_types)])
+    o_shots = len(opp_df[opp_df['type_id'].isin(shot_types)])
+    g_sot = len(goz_df[goz_df['type_id'].isin([15, 16])])
+    o_sot = len(opp_df[opp_df['type_id'].isin([15, 16])])
+    g_xg = round(goz_df['xG'].sum(), 2) if 'xG' in goz_df.columns else 0
+    o_xg = round(opp_df['xG'].sum(), 2) if 'xG' in opp_df.columns else 0
+    g_pass = len(goz_df[goz_df['type_id'] == 1])
+    o_pass = len(opp_df[opp_df['type_id'] == 1])
+    g_pass_ok = len(goz_df[(goz_df['type_id'] == 1) & (goz_df['outcome'] == 1)])
+    o_pass_ok = len(opp_df[(opp_df['type_id'] == 1) & (opp_df['outcome'] == 1)])
+    g_acc = round(g_pass_ok / max(g_pass, 1) * 100, 1)
+    o_acc = round(o_pass_ok / max(o_pass, 1) * 100, 1)
+    box_entries = cross_cnt = ground_cnt = 0
+    if 'Pass End X' in goz_df.columns and 'Pass End Y' in goz_df.columns:
+        be = goz_df[
+            (goz_df['type_id'] == 1) &
+            (goz_df['Pass End X'].notna()) &
+            (goz_df['Pass End X'] > 83) &
+            (goz_df['Pass End Y'].between(21, 79))
+        ]
+        box_entries = len(be)
+        cross_cnt = len(be[be['Cross'] == 'Si']) if 'Cross' in be.columns else 0
+        ground_cnt = box_entries - cross_cnt
+
+        prog = goz_df[
+            (goz_df['type_id'] == 1) &
+            (goz_df['outcome'] == 1) &
+            (goz_df['Pass End X'].notna()) &
+            ((goz_df['Pass End X'] - goz_df['x']) > 12) &
+            (goz_df['Pass End X'] > 60)
+        ]
+        if not prog.empty:
+            hero_s = prog.groupby('player_name').size().sort_values(ascending=False)
+            hero_name = hero_s.index[0].split()[-1]
+            hero_count = int(hero_s.iloc[0])
+        else:
+            hero_name, hero_count = 'N/A', 0
+    else:
+        hero_name, hero_count = 'N/A', 0
+    risky_losses = len(goz_df[
+        (((goz_df['type_id'] == 1) & (goz_df['outcome'] == 0)) | (goz_df['type_id'] == 50)) &
+        (goz_df['x'] < 50)
+    ])
+
+    did = []
+    todo = []
+    if gg >= og:
+        did.append(f"Result control: {gg}-{og}.")
+    if g_xg >= o_xg:
+        did.append(f"Chance quality matched or beat {opp_name}: xG {g_xg} vs {o_xg}.")
+    else:
+        todo.append(f"Improve chance quality: xG {g_xg} vs {o_xg}.")
+    if g_sot < 4:
+        todo.append(f"Increase shots on target: only {g_sot}.")
+    if box_entries < 12:
+        todo.append(f"Create more box access: {box_entries} entries.")
+    if risky_losses > 12:
+        todo.append(f"Reduce high-risk losses in own half: {risky_losses}.")
+    if not did:
+        did.append("Kept enough data structure for a clear review.")
+    if not todo:
+        todo.append("Maintain the same base principles and refine final-action detail.")
+
+    return html.Div(className="report-page", children=[
+        html.Div(className="report-header", children=[
+            html.Img(src="/assets/logo.png", className="report-logo"),
+            html.Div([
+                html.Div("tactIQ", className="report-brand"),
+                html.Div("Post-Match Report", className="report-kicker"),
+            ]),
+        ]),
+        html.H1(match_label, className="report-title"),
+        html.P("Coach notes and match review for Göztepe.", className="report-subtitle"),
+        html.Div(className="report-scorecard", children=[
+            html.Div(className="report-score-week", children=f"Week {week}" if week else "Selected Match"),
+            html.Div(className="report-scoreline", children=[
+                html.Img(src=goz_logo, className="report-team-logo"),
+                html.Div(className="report-score", children=f"{gg} - {og}"),
+                html.Img(src=opp_logo, className="report-team-logo"),
+            ]),
+            html.Div(className="report-score-label", children=f"Göztepe vs {opp_name}"),
+            html.Div(className="report-stat-table", children=[
+                html.Div([html.Strong(str(g_xg)), html.Span("xG"), html.Strong(str(o_xg))]),
+                html.Div([html.Strong(str(g_shots)), html.Span("Shots"), html.Strong(str(o_shots))]),
+                html.Div([html.Strong(str(g_sot)), html.Span("On Target"), html.Strong(str(o_sot))]),
+                html.Div([html.Strong(f"{g_acc}%"), html.Span("Pass Accuracy"), html.Strong(f"{o_acc}%")]),
+                html.Div([html.Strong(str(g_pass)), html.Span("Passes"), html.Strong(str(o_pass))]),
+            ]),
+            html.Div(className="report-card-row", children=[
+                html.Div(className="report-card-metric", children=[
+                    html.Strong(str(box_entries)),
+                    html.Span("Box Entries"),
+                    html.Em(f"Cross {cross_cnt} · Ground {ground_cnt}"),
+                ]),
+                html.Div(className="report-card-metric", children=[
+                    html.Strong(hero_name),
+                    html.Span("Invisible Hero"),
+                    html.Em(f"{hero_count} progressive passes"),
+                ]),
+            ]),
+        ]),
+        html.Div(className="report-section", children=[
+            html.H3("Match Snapshot"),
+            html.Div(className="report-grid", children=[
+                html.Div(className="report-pill", children=[html.Strong(f"{gg}-{og}"), html.Span("Score")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{g_xg} - {o_xg}"), html.Span("xG")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{g_shots} - {o_shots}"), html.Span("Shots")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{g_sot} - {o_sot}"), html.Span("Shots on target")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{g_acc}%"), html.Span("Göztepe pass accuracy")]),
+                html.Div(className="report-pill", children=[html.Strong(str(box_entries)), html.Span("Box entries")]),
+            ]),
+        ]),
+        html.Div(className="report-section", children=[
+            html.H3("Coach Notes"),
+            html.Ul([html.Li(item) for item in did]),
+        ]),
+        html.Div(className="report-section", children=[
+            html.H3("Next Actions"),
+            html.Ul([html.Li(item) for item in todo]),
+        ]),
+    ])
+
+
 def _status_item(text, detail=None, color=GOLD):
     return html.Div(style={
         "padding": "10px 11px",
@@ -1458,6 +1596,9 @@ def layout():
                         placeholder="Select opponent...",
                     ),
                 ]),
+                html.Div(className="report-actions", children=[
+                    html.Button("Report", type="button", className="btn-print btn-report-print"),
+                ]),
             ]),
         ]),
         dcc.Loading(
@@ -1465,6 +1606,8 @@ def layout():
             type="circle",
             color=GOLD,
             children=html.Div(className="content-container", style={"padding": "0 20px 60px"}, children=[
+                html.Div(id="post-match-report-container", className="report-only"),
+                html.Div(className="report-screen", children=[
                 html.Div(style={'margin': '28px 0 16px'}, children=[
                     html.Label('SELECT MATCH', className='goz-label',
                                style={'marginBottom': '10px', 'display': 'block'}),
@@ -1517,6 +1660,7 @@ def layout():
                     ),
                 ]),
                 html.Div(id='post-match-h2h-container', style={"marginTop": "24px"}),
+                ]),
             ])
         ),
         html.Footer(className="footer", children=[
@@ -1553,7 +1697,8 @@ def toggle_post_match_transition_filter(active_tab):
 
 @callback(
     [Output('post-match-form-container', 'children'),
-     Output('post-match-h2h-container', 'children')],
+     Output('post-match-h2h-container', 'children'),
+     Output('post-match-report-container', 'children')],
     [Input('post-match-rival-selector', 'value'),
      Input('post-match-match-selector', 'value'),
      Input('post-match-tabs', 'value'),
@@ -1561,9 +1706,9 @@ def toggle_post_match_transition_filter(active_tab):
 )
 def update_post_match(rival, selected_file, active_tab, transition_filter):
     if not rival:
-        return [html.Div("Select an opponent", className="goz-card-desc")] * 2
+        return html.Div("Select an opponent", className="goz-card-desc"), html.Div("Select an opponent", className="goz-card-desc"), html.Div()
     if not selected_file:
-        return [html.Div("Select a match", className="goz-card-desc")] * 2
+        return html.Div("Select a match", className="goz-card-desc"), html.Div("Select a match", className="goz-card-desc"), html.Div()
 
     if not active_tab:
         active_tab = "checklist-tab"
@@ -1576,7 +1721,8 @@ def update_post_match(rival, selected_file, active_tab, transition_filter):
         opp_name = _clean(rival)
         form = _build_form_section(rival, opp_name, selected_file)
         h2h = _build_h2h_section(rival, opp_name, active_tab, selected_file, transition_filter)
-        result = [form, h2h]
+        report = _build_post_match_report(rival, selected_file)
+        result = [form, h2h, report]
         _POST_MATCH_CACHE[cache_key] = result
         if len(_POST_MATCH_CACHE) > 10:
             _POST_MATCH_CACHE.pop(next(iter(_POST_MATCH_CACHE)))

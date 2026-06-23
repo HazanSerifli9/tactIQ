@@ -12,7 +12,7 @@ import io
 import plotly.graph_objects as go
 from dash import html, dcc, callback, Input, Output, ALL, ctx
 import dash_bootstrap_components as dbc
-from utils.data import extract_fixture_data, calculate_standings, get_data_dir
+from utils.data import extract_fixture_data, calculate_standings, get_data_dir, TEAM_LOGOS
 
 dash.register_page(__name__, path='/pre-match', title='Göztepe Hub | Pre-Match')
 
@@ -2072,6 +2072,79 @@ def _build_game_plan_content(stats, opp_name, opponent):
     ])
 
 
+def _rank_text(team, column, higher_is_better=True):
+    try:
+        rank, total = _league_rank_for_metric(team, column, higher_is_better)
+        return f"#{rank}/{total}"
+    except Exception:
+        return "n/a"
+
+
+def _build_pre_match_report(opponent):
+    if not opponent:
+        return html.Div()
+
+    stats = _get_season_stats(opponent)
+    opp_name = _clean(opponent)
+    buildup = stats.get('buildup', {})
+    corners = stats.get('corners', {})
+    goalkicks = stats.get('goalkicks', {})
+    recoveries = stats.get('all_recoveries', [])
+    losses = stats.get('all_losses', [])
+    def_profile = stats.get('def_profile', {})
+    lane, lane_pct = _largest_buildup_lane(stats)
+    lane_label = {'left': 'Left side', 'center': 'Central lane', 'right': 'Right side'}[lane]
+    rec_shot_rate = round(sum(1 for r in recoveries if r.get('shot')) / max(len(recoveries), 1) * 100, 1) if recoveries else 0
+    loss_shot_rate = round(sum(1 for l in losses if l.get('shot')) / max(len(losses), 1) * 100, 1) if losses else 0
+    turnover_pct = buildup.get('outcomes_10s', {}).get('turnover_pct', 0)
+    danger_after_turnover = buildup.get('outcomes_10s', {}).get('opp_danger_pct', 0)
+    corner_pref = "inswinger" if corners.get('inswinger', 0) >= corners.get('outswinger', 0) else "outswinger"
+    opponent_logo = "/" + TEAM_LOGOS.get(opponent, "assets/logo.png").lstrip("/")
+
+    return html.Div(className="report-page", children=[
+        html.Div(className="report-header", children=[
+            html.Img(src="/assets/logo.png", className="report-logo"),
+            html.Div([
+                html.Div("tactIQ", className="report-brand"),
+                html.Div("Pre-Match Report", className="report-kicker"),
+            ]),
+        ]),
+        html.Div(className="report-opponent-title", children=[
+            html.Img(src=opponent_logo, className="report-opponent-logo"),
+            html.H1(opp_name, className="report-title"),
+        ]),
+        html.P(f"Opponent-focused match plan for {opp_name}, generated from season event data.", className="report-subtitle"),
+        html.Div(className="report-section", children=[
+            html.H3("Game Plan"),
+            html.Ul([
+                html.Li(f"Press their main build-up lane: {lane_label} ({lane_pct}%). Force play into our trap before jumping."),
+                html.Li(f"On regain, attack quickly: opponent losses become shots {loss_shot_rate}% of the time."),
+                html.Li(f"Rest defense priority: their regains become shots {rec_shot_rate}% of the time."),
+                html.Li(f"Set-piece prep: main corner tendency is {corner_pref}; long goal-kick rate {goalkicks.get('long_pct', 0)}%."),
+            ]),
+        ]),
+        html.Div(className="report-section", children=[
+            html.H3("Key Info"),
+            html.Div(className="report-grid", children=[
+                html.Div(className="report-pill", children=[html.Strong(f"{turnover_pct}%"), html.Span("Build-up turnover rate")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{danger_after_turnover}%"), html.Span("Danger after build-up losses")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{def_profile.get('z14_success_allowed_pct', 0)}%"), html.Span("Zone 14 access allowed")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{corners.get('total', 0)}"), html.Span("Corners sampled")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{len(recoveries)}"), html.Span("Opponent regains")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{len(losses)}"), html.Span("Opponent losses")]),
+            ]),
+        ]),
+        html.Div(className="report-section", children=[
+            html.H3("League Rankings"),
+            html.Div(className="report-grid", children=[
+                html.Div(className="report-pill", children=[html.Strong(_rank_text(opponent, 'passes_pg', True)), html.Span("Pass volume")]),
+                html.Div(className="report-pill", children=[html.Strong(_rank_text(opponent, 'goals_pg', True)), html.Span("Goals per game")]),
+                html.Div(className="report-pill", children=[html.Strong(_rank_text(opponent, 'xga_pg', False)), html.Span("Defensive solidity")]),
+            ]),
+        ]),
+    ])
+
+
 def _build_tab_content(active_tab, stats, opp_name, opponent):
     if active_tab == 'game-plan-tab':
         return _build_game_plan_content(stats, opp_name, opponent)
@@ -2785,10 +2858,15 @@ def layout():
                         clearable=False,
                     ),
                 ]),
+                html.Div(className="report-actions", children=[
+                    html.Button("Report", type="button", className="btn-print btn-report-print"),
+                ]),
             ]),
         ]),
 
         html.Div(className="content-container", style={"padding": "0 20px 60px"}, children=[
+            html.Div(id="pre-match-report-container", className="report-only"),
+            html.Div(className="report-screen", children=[
             dcc.Interval(
                 id='pre-match-benchmark-refresh',
                 interval=5000,
@@ -2816,6 +2894,7 @@ def layout():
             ]),
             html.Div(id='pre-match-kpi-container'),
             html.Div(id='pre-match-tab-content'),
+            ]),
         ]),
 
         html.Footer(className="footer", children=[
@@ -2832,17 +2911,19 @@ def layout():
 # ──────────────────────────────────────────────────────────────
 
 @callback(
-    Output('pre-match-benchmark-container', 'children'),
+    [Output('pre-match-benchmark-container', 'children'),
+     Output('pre-match-report-container', 'children')],
     [Input('pre-match-rival-selector', 'value'),
      Input('pre-match-benchmark-refresh', 'n_intervals')]
 )
 def update_pre_match(opponent, _refresh_tick):
     if not opponent:
-        return html.Div()
+        return html.Div(), html.Div()
 
     opp_name  = _clean(opponent)
     benchmark = _build_benchmarking_section(opponent, opp_name)
-    return benchmark
+    report = _build_pre_match_report(opponent)
+    return benchmark, report
 
 
 @callback(

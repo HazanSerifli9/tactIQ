@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from dash import html, dcc, callback, Input, Output
 import dash_bootstrap_components as dbc
 
-from utils.data import get_data_dir
+from utils.data import get_data_dir, TEAM_LOGOS
 
 dash.register_page(__name__, path='/rival-scout', title='Göztepe Hub | Rival Scout')
 
@@ -199,6 +199,95 @@ def _match_summary(filename: str, df: pd.DataFrame, team_name: str) -> dict:
         'sot_for': sot_for,
         'passes': passes_for,
     }
+
+
+def _selected_match(matches: list, selected_file: str | None):
+    if selected_file:
+        for filename, df in matches:
+            if filename == selected_file:
+                return filename, df
+    return matches[0] if matches else (None, None)
+
+
+def _fixture_sides(df: pd.DataFrame) -> tuple[str, str]:
+    teams = [team for team in df['team_name'].dropna().unique().tolist()]
+    if 'team_position' in df.columns:
+        home = df[df['team_position'].astype(str).str.lower().eq('home')]['team_name'].dropna().unique().tolist()
+        away = df[df['team_position'].astype(str).str.lower().eq('away')]['team_name'].dropna().unique().tolist()
+        if home and away:
+            return home[0], away[0]
+    if len(teams) >= 2:
+        return teams[0], teams[1]
+    fallback = teams[0] if teams else "Unknown"
+    return fallback, "Unknown"
+
+
+def _team_match_stats(df: pd.DataFrame, team_name: str) -> dict:
+    team_df = df[df['team_name'] == team_name]
+    type_ids = pd.to_numeric(team_df.get('type_id', pd.Series([], dtype=float)), errors='coerce')
+    passes = int((type_ids == 1).sum()) if not type_ids.empty else len(team_df[team_df['event'] == 'Pass'])
+    pass_success = len(team_df[(team_df['event'] == 'Pass') & (team_df.get('outcome') == 1)])
+    if not type_ids.empty:
+        pass_success = int(((type_ids == 1) & (team_df.get('outcome') == 1)).sum())
+    pass_accuracy = round(pass_success / max(passes, 1) * 100, 1)
+    shots = int(type_ids.isin([13, 14, 15, 16]).sum()) if not type_ids.empty else len(team_df[team_df['event'].isin(SHOT_EVENTS)])
+    sot = int(type_ids.isin([15, 16]).sum()) if not type_ids.empty else len(team_df[team_df['event'].isin(['Saved Shot', 'Goal'])])
+    goals = len(team_df[team_df['event'] == 'Goal'])
+    xg = round(float(team_df['xG'].sum()), 2) if 'xG' in team_df.columns else None
+    return {
+        'goals': goals,
+        'shots': shots,
+        'sot': sot,
+        'passes': passes,
+        'pass_accuracy': pass_accuracy,
+        'xg': xg,
+    }
+
+
+def _asset_src(path: str) -> str:
+    return "/" + path.lstrip("/")
+
+
+def _build_rival_match_scorecard(filename: str, df: pd.DataFrame):
+    if df is None or df.empty:
+        return html.Div()
+
+    home, away = _fixture_sides(df)
+    home_stats = _team_match_stats(df, home)
+    away_stats = _team_match_stats(df, away)
+    week = int(df['week'].iloc[0]) if 'week' in df.columns and not df.empty else ""
+    home_logo = _asset_src(TEAM_LOGOS.get(home, "assets/logo.png"))
+    away_logo = _asset_src(TEAM_LOGOS.get(away, "assets/logo.png"))
+
+    stat_rows = []
+    if home_stats['xg'] is not None or away_stats['xg'] is not None:
+        stat_rows.append(("xG", home_stats['xg'] or 0, away_stats['xg'] or 0))
+    stat_rows.extend([
+        ("Shots", home_stats['shots'], away_stats['shots']),
+        ("On Target", home_stats['sot'], away_stats['sot']),
+        ("Pass Accuracy", f"{home_stats['pass_accuracy']}%", f"{away_stats['pass_accuracy']}%"),
+        ("Passes", home_stats['passes'], away_stats['passes']),
+    ])
+
+    return html.Div(className="report-scorecard", children=[
+        html.Div(f"WEEK {week}" if week != "" else filename.replace('.parquet', ''), className="report-score-week"),
+        html.Div(className="report-scoreline", children=[
+            html.Img(src=home_logo, className="report-team-logo"),
+            html.Span(str(home_stats['goals']), className="report-score report-score-home"),
+            html.Span("–", className="report-score-label"),
+            html.Span(str(away_stats['goals']), className="report-score report-score-away"),
+            html.Img(src=away_logo, className="report-team-logo"),
+        ]),
+        html.Div(f"{_short(home)} vs {_short(away)}", className="report-score-label"),
+        html.Div(className="report-stat-table", children=[
+            html.Div(className="report-stat-row", children=[
+                html.Span(str(home_value)),
+                html.Strong(label.upper()),
+                html.Span(str(away_value)),
+            ])
+            for label, home_value, away_value in stat_rows
+        ]),
+    ])
 
 
 # ── Zone helpers ────────────────────────────────────────────────
@@ -1794,6 +1883,66 @@ def _build_projected_xi(matches, team_name, rival_label):
         return html.Div()
 
 
+def _build_rival_report(team_name, selected_file=None):
+    if not team_name:
+        return html.Div()
+    rival_label = _short(team_name)
+    matches = _load_rival_matches(team_name)
+    selected_filename, selected_df = _selected_match(matches, selected_file)
+    xi = _compute_probable_xi(matches, team_name) if matches else {'formation': 'n/a', 'players': [], 'sample_matches': 0}
+    summaries = [_match_summary(fn, df, team_name) for fn, df in matches[:6]]
+    starters = xi.get('players', [])[:11]
+    top_names = [
+        f"{p.get('position', 'UNK')} - {_short_player_name(p.get('name', ''))} ({p.get('confidence', 0)}%)"
+        for p in starters
+    ]
+    wins = sum(1 for s in summaries if s['result'] == 'W')
+    draws = sum(1 for s in summaries if s['result'] == 'D')
+    losses = sum(1 for s in summaries if s['result'] == 'L')
+    shots_for = round(sum(s['shots_for'] for s in summaries) / max(len(summaries), 1), 1)
+    shots_against = round(sum(s['shots_against'] for s in summaries) / max(len(summaries), 1), 1)
+    passes = round(sum(s['passes'] for s in summaries) / max(len(summaries), 1))
+    match_card = _build_rival_match_scorecard(selected_filename, selected_df) if selected_filename is not None else html.Div()
+    if selected_df is not None:
+        home, away = _fixture_sides(selected_df)
+        report_title = f"{_short(home)} vs {_short(away)}"
+        report_subtitle = f"Selected-match scout report with {rival_label} context and projected XI."
+    else:
+        report_title = f"{rival_label} Scout"
+        report_subtitle = f"Projected XI and scouting summary from {xi.get('sample_matches', 0)} sampled matches."
+
+    return html.Div(className="report-page", children=[
+        html.Div(className="report-header", children=[
+            html.Img(src="/assets/logo.png", className="report-logo"),
+            html.Div([
+                html.Div("tactIQ", className="report-brand"),
+                html.Div("Rival Scout Report", className="report-kicker"),
+            ]),
+        ]),
+        html.H1(report_title, className="report-title"),
+        html.P(report_subtitle, className="report-subtitle"),
+        match_card,
+        html.Div(className="report-section", children=[
+            html.H3("Projected XI"),
+            html.Div(className="report-grid", children=[
+                html.Div(className="report-pill", children=[html.Strong(xi.get('formation', 'n/a')), html.Span("Most common formation")]),
+                html.Div(className="report-pill", children=[html.Strong(str(xi.get('sample_matches', 0))), html.Span("Matches sampled")]),
+                html.Div(className="report-pill", children=[html.Strong(f"{wins}-{draws}-{losses}"), html.Span("Sample W-D-L")]),
+            ]),
+            html.Ul([html.Li(name) for name in top_names]),
+        ]),
+        html.Div(className="report-section", children=[
+            html.H3("Scout Notes"),
+            html.Ul([
+                html.Li(f"Average shots for: {shots_for}; average shots against: {shots_against}."),
+                html.Li(f"Average pass volume: {passes} passes per sampled match."),
+                html.Li("Use projected XI confidence as a guide, not confirmed team news."),
+                html.Li("Prioritize clips for their strongest repeat starters and recurring match pattern."),
+            ]),
+        ]),
+    ])
+
+
 # ════════════════════════════════════════════════════════════════
 # UI HELPERS
 # ════════════════════════════════════════════════════════════════
@@ -2296,10 +2445,15 @@ def layout():
                         searchable=True,
                     ),
                 ]),
+                html.Div(className="report-actions", children=[
+                    html.Button("Report", type="button", className="btn-print btn-report-print"),
+                ]),
             ]),
         ]),
 
         html.Div(className='content-container', style={'padding': '0 20px 60px'}, children=[
+            html.Div(id='scout-report-container', className='report-only'),
+            html.Div(className='report-screen', children=[
 
             # ── Match selector (populated dynamically) ────────
             html.Div(style={'margin': '28px 0 16px'}, children=[
@@ -2353,6 +2507,7 @@ def layout():
 
             # ── Tab content ───────────────────────────────────
             html.Div(id='scout-tab-content', style={'marginTop': '8px'}),
+            ]),
         ]),
 
         html.Footer(className='footer', children=[
@@ -2413,6 +2568,15 @@ def toggle_scout_transition_filter(active_tab):
     if active_tab in ('off-trans', 'def-trans'):
         return {'display': 'flex', 'justifyContent': 'center', 'margin': '0 0 18px'}
     return {'display': 'none'}
+
+
+@callback(
+    Output('scout-report-container', 'children'),
+    [Input('scout-rival-selector', 'value'),
+     Input('scout-match-selector', 'value')],
+)
+def update_scout_report(rival_label, selected_file):
+    return _build_rival_report(rival_label, selected_file)
 
 
 @callback(

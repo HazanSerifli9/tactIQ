@@ -1,9 +1,236 @@
 @media print {
+    @page {
+        margin: 12mm;
+    }
+
     /* Hide navigation and buttons */
     .navbar, .nav-tabs, .btn-print, .no-print, header, .footer { display: none !important; }
+
+    .report-only { display: none !important; }
+    body.report-print-mode .goz-hero { display: none !important; }
+    body.report-print-mode .report-screen { display: none !important; }
+    body.report-print-mode .report-only { display: block !important; }
+
+    .report-page {
+        background: white !important;
+        color: #111 !important;
+        font-family: 'Inter', sans-serif;
+    }
+
+    .report-header {
+        display: flex !important;
+        align-items: center;
+        gap: 12px;
+        padding-bottom: 12px;
+        margin-bottom: 18px;
+        border-bottom: 2px solid #d6a100;
+    }
+
+    .report-logo {
+        width: 44px;
+        height: 44px;
+        object-fit: contain;
+    }
+
+    .report-brand {
+        color: #111 !important;
+        font-family: 'Oswald', sans-serif;
+        font-size: 24px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .report-kicker {
+        color: #777 !important;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        margin-top: 4px;
+    }
+
+    .report-title {
+        color: #111 !important;
+        font-size: 22px;
+        font-weight: 800;
+        margin: 0 0 6px;
+    }
+
+    .report-opponent-title {
+        display: flex !important;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 6px;
+    }
+
+    .report-opponent-logo {
+        width: 48px;
+        height: 48px;
+        object-fit: contain;
+    }
+
+    .report-opponent-title .report-title {
+        margin: 0;
+    }
+
+    .report-subtitle {
+        color: #555 !important;
+        font-size: 12px;
+        margin: 0 0 16px;
+    }
+
+    .report-section {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    .report-section h3 {
+        color: #111 !important;
+        font-size: 13px;
+        margin: 0 0 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+    }
+
+    .report-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+    }
+
+    .report-pill {
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 9px;
+    }
+
+    .report-pill strong {
+        display: block;
+        color: #111 !important;
+        font-size: 16px;
+    }
+
+    .report-pill span, .report-page li, .report-page p {
+        color: #333 !important;
+        font-size: 11px;
+        line-height: 1.45;
+    }
+
+    .report-scorecard {
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 14px;
+        margin-bottom: 14px;
+        text-align: center;
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    .report-score-week {
+        color: #777 !important;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+
+    .report-scoreline {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 26px;
+    }
+
+    .report-team-logo {
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
+    }
+
+    .report-score {
+        color: #111 !important;
+        font-size: 34px;
+        font-weight: 900;
+        letter-spacing: 4px;
+    }
+
+    .report-score-label {
+        color: #555 !important;
+        font-size: 12px;
+        font-weight: 700;
+        margin: 5px 0 12px;
+    }
+
+    .report-stat-table {
+        max-width: 360px;
+        margin: 0 auto 12px;
+    }
+
+    .report-stat-table > div {
+        display: grid;
+        grid-template-columns: 1fr 1.5fr 1fr;
+        align-items: center;
+        border-top: 1px solid #eee;
+        padding: 6px 0;
+    }
+
+    .report-stat-table strong {
+        color: #111 !important;
+        font-size: 13px;
+    }
+
+    .report-stat-table span {
+        color: #666 !important;
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+    }
+
+    .report-card-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .report-card-metric {
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 10px;
+    }
+
+    .report-card-metric strong {
+        display: block;
+        color: #111 !important;
+        font-size: 20px;
+    }
+
+    .report-card-metric span {
+        display: block;
+        color: #666 !important;
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+    }
+
+    .report-card-metric em {
+        display: block;
+        color: #777 !important;
+        font-size: 10px;
+        font-style: normal;
+        margin-top: 2px;
+    }
     
     /* Reset container constraints */
     .container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+    .page-wrap { padding-top: 0 !important; min-height: auto !important; }
+    .content-container, .tq-content { padding-top: 0 !important; }
     
     /* Card styling adjustment */
     .card { border: none !important; break-inside: avoid; page-break-inside: avoid; }
