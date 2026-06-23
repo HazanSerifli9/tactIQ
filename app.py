@@ -1,5 +1,9 @@
 import os
 
+from shared.matplotlib_config import configure_matplotlib
+
+configure_matplotlib()
+
 import dash
 from dash import Dash, html, dcc, Input, Output, State, callback
 import dash_bootstrap_components as dbc

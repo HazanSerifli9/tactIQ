@@ -1,4 +1,8 @@
 import os
+from shared.matplotlib_config import configure_matplotlib
+
+configure_matplotlib()
+
 from PIL import Image
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 from utils.data import TEAM_LOGOS

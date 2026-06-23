@@ -2,10 +2,20 @@ import os
 import pickle
 import hashlib
 import functools
+import threading
 from utils.data import get_data_dir, _get_dir_signature
 
 CACHE_DIR = os.path.join(get_data_dir(), ".cache")
 CACHE_VERSION = "v8"
+_CACHE_LOCKS = {}
+_CACHE_LOCKS_GUARD = threading.Lock()
+
+
+def _get_cache_lock(cache_key):
+    with _CACHE_LOCKS_GUARD:
+        if cache_key not in _CACHE_LOCKS:
+            _CACHE_LOCKS[cache_key] = threading.Lock()
+        return _CACHE_LOCKS[cache_key]
 
 def disk_cache(func):
     """
@@ -74,24 +84,37 @@ def disk_cache(func):
             except Exception:
                 pass
                 
-        # Cache miss — execute the function
-        result = func(*args, **kwargs)
-        
-        # Try cleaning up old cache files for this function to save space
-        try:
-            for file in os.listdir(CACHE_DIR):
-                if file.startswith(f"{func.__name__}_") and file.endswith(".pkl") and file != cache_filename:
-                    os.remove(os.path.join(CACHE_DIR, file))
-        except Exception:
-            pass
-            
-        # Save to disk and memory
-        try:
-            with open(cache_path, 'wb') as f:
-                pickle.dump(result, f)
-            func._mem_cache[mem_key] = result
-        except Exception:
-            pass
-            
-        return result
+        with _get_cache_lock(cache_filename):
+            if mem_key in func._mem_cache:
+                return func._mem_cache[mem_key]
+
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, 'rb') as f:
+                        result = pickle.load(f)
+                    func._mem_cache[mem_key] = result
+                    return result
+                except Exception:
+                    pass
+
+            # Cache miss — execute the function
+            result = func(*args, **kwargs)
+
+            # Try cleaning up old cache files for this function to save space
+            try:
+                for file in os.listdir(CACHE_DIR):
+                    if file.startswith(f"{func.__name__}_") and file.endswith(".pkl") and file != cache_filename:
+                        os.remove(os.path.join(CACHE_DIR, file))
+            except Exception:
+                pass
+
+            # Save to disk and memory
+            try:
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(result, f)
+                func._mem_cache[mem_key] = result
+            except Exception:
+                pass
+
+            return result
     return wrapper

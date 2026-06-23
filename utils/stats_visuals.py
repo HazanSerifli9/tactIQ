@@ -1,4 +1,8 @@
+from shared.matplotlib_config import configure_matplotlib
 
+configure_matplotlib()
+
+import threading
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -56,6 +60,7 @@ def get_team_color(team_name: str) -> str:
 # --- Data Caching ---
 _EVENTS_CACHE: Optional[pd.DataFrame] = None
 _EVENTS_CACHE_SIG = None
+_EVENTS_CACHE_LOCK = threading.Lock()
 
 def load_all_events() -> pd.DataFrame:
     """
@@ -72,30 +77,34 @@ def load_all_events() -> pd.DataFrame:
     
     if _EVENTS_CACHE is not None and _EVENTS_CACHE_SIG == current_sig:
         return _EVENTS_CACHE
-    
-    # Directory changed or first load — rebuild cache
-    all_files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.parquet')]
-    
-    events_list = []
-    
-    for file in all_files:
-        try:
-            df = pd.read_parquet(file)
-            df['match_id'] = os.path.basename(file)
-            events_list.append(df)
-        except Exception:
-            continue
-            
-    if not events_list:
-        _EVENTS_CACHE = pd.DataFrame()
-    else:
-        _EVENTS_CACHE = pd.concat(events_list, ignore_index=True)
-        for col in ['x', 'y', 'Pass End X', 'Pass End Y']:
-            if col in _EVENTS_CACHE.columns:
-                _EVENTS_CACHE[col] = pd.to_numeric(_EVENTS_CACHE[col], errors='coerce')
-    
-    _EVENTS_CACHE_SIG = current_sig
-    return _EVENTS_CACHE
+
+    with _EVENTS_CACHE_LOCK:
+        if _EVENTS_CACHE is not None and _EVENTS_CACHE_SIG == current_sig:
+            return _EVENTS_CACHE
+
+        # Directory changed or first load — rebuild cache
+        all_files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.parquet')]
+
+        events_list = []
+
+        for file in all_files:
+            try:
+                df = pd.read_parquet(file)
+                df['match_id'] = os.path.basename(file)
+                events_list.append(df)
+            except Exception:
+                continue
+
+        if not events_list:
+            _EVENTS_CACHE = pd.DataFrame()
+        else:
+            _EVENTS_CACHE = pd.concat(events_list, ignore_index=True)
+            for col in ['x', 'y', 'Pass End X', 'Pass End Y']:
+                if col in _EVENTS_CACHE.columns:
+                    _EVENTS_CACHE[col] = pd.to_numeric(_EVENTS_CACHE[col], errors='coerce')
+
+        _EVENTS_CACHE_SIG = current_sig
+        return _EVENTS_CACHE
 
 def _plot_logo(ax, team_name: str):
     """Helper to plot team logo on an axis."""

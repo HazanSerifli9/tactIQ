@@ -4,6 +4,10 @@ import base64
 import numpy as np
 from typing import List, Dict, Any, Optional
 
+from shared.matplotlib_config import configure_matplotlib
+
+configure_matplotlib()
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox

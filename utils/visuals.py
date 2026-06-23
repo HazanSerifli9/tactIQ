@@ -1,3 +1,7 @@
+from shared.matplotlib_config import configure_matplotlib
+
+configure_matplotlib()
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np

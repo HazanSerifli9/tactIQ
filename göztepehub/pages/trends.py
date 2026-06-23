@@ -8,6 +8,59 @@ import plotly.graph_objects as go
 dash.register_page(__name__, path='/trends', title='Göztepe Hub | Trends')
 
 
+def _short_team_label(team_name, max_len=18):
+    if not team_name:
+        return ""
+    label = (
+        str(team_name)
+        .replace(" Spor Kulübü", "")
+        .replace(" Jimnastik Kulübü", "")
+        .replace(" Futbol Kulübü", "")
+        .replace(" Kulübü", "")
+    )
+    return label if len(label) <= max_len else f"{label[:max_len - 1]}…"
+
+
+def _readable_legend(y=1.15):
+    return dict(
+        orientation="h",
+        traceorder="normal",
+        yanchor="bottom",
+        y=y,
+        xanchor="center",
+        x=0.5,
+        font=dict(color="white", size=11),
+        bgcolor="rgba(14,18,24,0.72)",
+        bordercolor="rgba(255,255,255,0.12)",
+        borderwidth=1,
+    )
+
+
+def _bar_text(values, decimals=0):
+    fmt = f"{{:.{decimals}f}}"
+    return [fmt.format(v) if v else "" for v in values]
+
+
+def _add_last_value_label(fig, x_values, y_values, label, color, suffix="", decimals=0):
+    if not x_values or not y_values:
+        return
+    last_x = x_values[-1]
+    last_y = y_values[-1]
+    fig.add_annotation(
+        x=last_x,
+        y=last_y,
+        text=f"{label}: {last_y:.{decimals}f}{suffix}",
+        showarrow=False,
+        xanchor="left",
+        xshift=10,
+        font=dict(color="white", size=11),
+        bgcolor="rgba(14,18,24,0.78)",
+        bordercolor=color,
+        borderwidth=1,
+        borderpad=4,
+    )
+
+
 def _record_badge(label, rec):
     total = rec['W'] + rec['D'] + rec['L']
     win_pct = round(rec['W'] / total * 100) if total else 0
@@ -46,16 +99,23 @@ def _build_loss_pattern_block(team_name, accent_color="#fbbf24"):
     # ── Chart 1: Goals scored vs conceded by minute band ──
     fig_bands = go.Figure(data=[
         go.Bar(name='Goals Scored', x=bands, y=[sb[b] for b in bands],
-               marker_color=accent_color, opacity=0.9),
+               marker_color=accent_color, opacity=0.9,
+               text=_bar_text([sb[b] for b in bands]), textposition='outside',
+               textfont=dict(color='white', size=12),
+               hovertemplate='Goals scored: %{y}<extra></extra>',
+               cliponaxis=False),
         go.Bar(name='Goals Conceded', x=bands, y=[cb[b] for b in bands],
-               marker_color='#ef4444', opacity=0.9),
+               marker_color='#ef4444', opacity=0.9,
+               text=_bar_text([cb[b] for b in bands]), textposition='outside',
+               textfont=dict(color='white', size=12),
+               hovertemplate='Goals conceded: %{y}<extra></extra>',
+               cliponaxis=False),
     ])
     fig_bands.update_layout(
         barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=10, r=10, t=10, b=30),
+        margin=dict(l=10, r=10, t=34, b=30),
         height=200,
-        legend=dict(orientation='h', y=-0.25, x=0.5, xanchor='center',
-                    font=dict(color='white', size=11)),
+        legend=_readable_legend(1.06),
         xaxis=dict(color='#888', showgrid=False),
         yaxis=dict(color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.08)'),
         font=dict(color='white'),
@@ -67,19 +127,28 @@ def _build_loss_pattern_block(team_name, accent_color="#fbbf24"):
     vals = [gs['Leading'], gs['Drawing'], gs['Trailing']]
     colors = [accent_color, '#888888', '#ef4444']
     pcts = [f"{v/total_conceded*100:.0f}%" for v in vals]
+    max_state_val = max(vals) or 1
 
     fig_state = go.Figure(go.Bar(
         y=states, x=vals, orientation='h',
         marker_color=colors,
         text=pcts, textposition='outside',
         textfont=dict(color='white', size=12),
+        hovertemplate='%{y}: %{x} conceded<extra></extra>',
+        cliponaxis=False,
     ))
     fig_state.update_layout(
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=10, r=40, t=10, b=10),
-        height=160,
-        xaxis=dict(color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.08)'),
-        yaxis=dict(color='white', showgrid=False),
+        margin=dict(l=150, r=70, t=10, b=10),
+        height=170,
+        xaxis=dict(
+            color='#888',
+            showgrid=True,
+            gridcolor='rgba(255,255,255,0.08)',
+            range=[0, max_state_val * 1.18],
+            fixedrange=True,
+        ),
+        yaxis=dict(color='white', showgrid=False, automargin=True),
         font=dict(color='white'),
     )
 
@@ -268,15 +337,22 @@ def _build_home_away_tab(compare_team=None):
 
     fig_goals = go.Figure(data=[
         go.Bar(name='Goals Scored / Game', x=x_labels, y=y_gf,
-               marker_color='#fbbf24', opacity=0.9),
+               marker_color='#fbbf24', opacity=0.9,
+               text=_bar_text(y_gf, 2), textposition='outside',
+               textfont=dict(color='white', size=12),
+               hovertemplate='Goals scored/game: %{y:.2f}<extra></extra>',
+               cliponaxis=False),
         go.Bar(name='Goals Conceded / Game', x=x_labels, y=y_ga,
-               marker_color='#ef4444', opacity=0.9),
+               marker_color='#ef4444', opacity=0.9,
+               text=_bar_text(y_ga, 2), textposition='outside',
+               textfont=dict(color='white', size=12),
+               hovertemplate='Goals conceded/game: %{y:.2f}<extra></extra>',
+               cliponaxis=False),
     ])
     fig_goals.update_layout(
         barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=10, r=10, t=10, b=30), height=220,
-        legend=dict(orientation='h', y=-0.3, x=0.5, xanchor='center',
-                    font=dict(color='white', size=11)),
+        margin=dict(l=10, r=10, t=42, b=30), height=240,
+        legend=_readable_legend(1.06),
         xaxis=dict(color='white', showgrid=False),
         yaxis=dict(color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.08)'),
         font=dict(color='white'),
@@ -285,17 +361,25 @@ def _build_home_away_tab(compare_team=None):
     # ── W/D/L stacked bar ──
     fig_record = go.Figure(data=[
         go.Bar(name='Won', x=x_labels, y=y_won,
-               marker_color='#22c55e', opacity=0.9),
+               marker_color='#22c55e', opacity=0.9,
+               text=_bar_text(y_won), textposition='inside',
+               insidetextfont=dict(color='white', size=12),
+               hovertemplate='Won: %{y}<extra></extra>'),
         go.Bar(name='Drawn', x=x_labels, y=y_drawn,
-               marker_color='#888888', opacity=0.9),
+               marker_color='#888888', opacity=0.9,
+               text=_bar_text(y_drawn), textposition='inside',
+               insidetextfont=dict(color='white', size=12),
+               hovertemplate='Drawn: %{y}<extra></extra>'),
         go.Bar(name='Lost', x=x_labels, y=y_lost,
-               marker_color='#ef4444', opacity=0.9),
+               marker_color='#ef4444', opacity=0.9,
+               text=_bar_text(y_lost), textposition='inside',
+               insidetextfont=dict(color='white', size=12),
+               hovertemplate='Lost: %{y}<extra></extra>'),
     ])
     fig_record.update_layout(
         barmode='stack', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=10, r=10, t=10, b=30), height=220,
-        legend=dict(orientation='h', y=-0.3, x=0.5, xanchor='center',
-                    font=dict(color='white', size=11)),
+        margin=dict(l=10, r=10, t=42, b=30), height=240,
+        legend=_readable_legend(1.06),
         xaxis=dict(color='white', showgrid=False),
         yaxis=dict(color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.08)'),
         font=dict(color='white'),
@@ -503,35 +587,59 @@ def _build_team_form_tab(compare_team):
         
         y1 = [d.get(metric, 0) for d in goz_data]
         x1 = [d['week'] for d in goz_data]
+        label1 = _short_team_label(name1, 14)
         
         mode = 'lines+markers' if not is_bar else 'lines'
         
         if is_bar:
-             fig.add_trace(go.Bar(x=x1, y=y1, name=name1, marker_color='#fbbf24'))
+             hover_label = "Goals conceded" if metric == "goals_conceded" else y_title
+             fig.add_trace(go.Bar(
+                 x=x1, y=y1, name=label1, marker_color='#fbbf24',
+                 text=_bar_text(y1), textposition='outside',
+                 textfont=dict(color='white', size=11),
+                 hovertemplate=f'{hover_label}: %{{y}}<extra></extra>',
+                 cliponaxis=False,
+             ))
         else:
-             fig.add_trace(go.Scatter(x=x1, y=y1, mode=mode, name=name1, 
-                                    line=dict(color='#fbbf24', width=3),
-                                    marker=dict(size=8, color='#fbbf24'), fill='tozeroy', fillcolor='rgba(251, 191, 36, 0.1)'))
+             fig.add_trace(go.Scatter(
+                 x=x1, y=y1, mode=mode, name=label1,
+                 line=dict(color='#fbbf24', width=3),
+                 marker=dict(size=8, color='#fbbf24'), fill='tozeroy',
+                 fillcolor='rgba(251, 191, 36, 0.1)',
+                 hovertemplate=f'{y_title}: %{{y}}<extra></extra>',
+             ))
+             _add_last_value_label(fig, x1, y1, label1, '#fbbf24', suffix='%' if metric == 'pass_accuracy' else '', decimals=0)
              
         if name2 and comp_data:
             y2 = [d.get(metric, 0) for d in comp_data]
             x2 = [d['week'] for d in comp_data]
             color2 = '#0ea5e9'
+            label2 = _short_team_label(name2, 14)
             if is_bar:
-                 fig.add_trace(go.Bar(x=x2, y=y2, name=name2, marker_color=color2))
+                 fig.add_trace(go.Bar(
+                     x=x2, y=y2, name=label2, marker_color=color2,
+                     text=_bar_text(y2), textposition='outside',
+                     textfont=dict(color='white', size=11),
+                     hovertemplate=f'{hover_label}: %{{y}}<extra></extra>',
+                     cliponaxis=False,
+                 ))
             else:
-                 fig.add_trace(go.Scatter(x=x2, y=y2, mode=mode, name=name2, 
-                                        line=dict(color=color2, width=3),
-                                        marker=dict(size=8, color=color2)))
+                 fig.add_trace(go.Scatter(
+                     x=x2, y=y2, mode=mode, name=label2,
+                     line=dict(color=color2, width=3),
+                     marker=dict(size=8, color=color2),
+                     hovertemplate=f'{y_title}: %{{y}}<extra></extra>',
+                 ))
+                 _add_last_value_label(fig, x2, y2, label2, color2, suffix='%' if metric == 'pass_accuracy' else '', decimals=0)
                  
         fig.update_layout(
              title=title, title_font=dict(color='white', size=14),
              paper_bgcolor='#1e1e1e', plot_bgcolor='#1e1e1e',
-             margin=dict(l=20, r=20, t=50, b=60),
+             margin=dict(l=48, r=96, t=78, b=48),
              xaxis=dict(title="Week", color='#888', showgrid=False, tickmode='linear', dtick=1),
              yaxis=dict(title=y_title, color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
              height=300, hovermode='x unified', barmode='group' if is_bar else None,
-             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(color='white', size=11))
+             legend=_readable_legend(1.04),
         )
         return fig
 
@@ -540,42 +648,68 @@ def _build_team_form_tab(compare_team):
     fig_ppg.add_trace(go.Scatter(
          x=valid_weeks_ppg, y=goz_ppg, mode='lines+markers', name='Göztepe',
          line=dict(color='#fbbf24', width=3), marker=dict(size=8, color='#fbbf24'),
-         fill='tozeroy', fillcolor='rgba(251, 191, 36, 0.1)'
+         fill='tozeroy', fillcolor='rgba(251, 191, 36, 0.1)',
+         hovertemplate='PPG: %{y:.2f}<extra></extra>',
     ))
+    _add_last_value_label(fig_ppg, valid_weeks_ppg, goz_ppg, "Göztepe", '#fbbf24', decimals=2)
     if compare_team and comp_ppg:
+        comp_label = _short_team_label(compare_team, 14)
         fig_ppg.add_trace(go.Scatter(
-             x=valid_weeks_ppg, y=comp_ppg, mode='lines+markers', name=compare_team,
-             line=dict(color='#0ea5e9', width=3), marker=dict(size=8, color='#0ea5e9')
+             x=valid_weeks_ppg, y=comp_ppg, mode='lines+markers', name=comp_label,
+             line=dict(color='#0ea5e9', width=3), marker=dict(size=8, color='#0ea5e9'),
+             hovertemplate='PPG: %{y:.2f}<extra></extra>',
         ))
+        _add_last_value_label(fig_ppg, valid_weeks_ppg, comp_ppg, comp_label, '#0ea5e9', decimals=2)
     fig_ppg.update_layout(
          title="Rolling Points Per Game (Form)", title_font=dict(color='white', size=14),
-         paper_bgcolor='#1e1e1e', plot_bgcolor='#1e1e1e', margin=dict(l=20, r=20, t=50, b=60),
+         paper_bgcolor='#1e1e1e', plot_bgcolor='#1e1e1e', margin=dict(l=48, r=96, t=78, b=48),
          xaxis=dict(title="Week", color='#888', showgrid=False, tickmode='linear', dtick=1),
          yaxis=dict(title="PPG", color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.1)', range=[0, 3.1]),
          height=300, hovermode='x unified', 
-         legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(color='white', size=11))
+         legend=_readable_legend(1.04),
     )
 
     # Attacking Form Dual Axis
     fig_attack = go.Figure()
     x_att = [d['week'] for d in goz_data]
-    fig_attack.add_trace(go.Bar(x=x_att, y=[d['goals_scored'] for d in goz_data], name='Goals (Göztepe)', marker_color='#fbbf24'))
-    fig_attack.add_trace(go.Scatter(x=x_att, y=[d['shots_on_target'] for d in goz_data], name='Shots on Target (Göz)', 
-                                    line=dict(color='#fcd34d', width=2), mode='lines+markers'))
+    goals_goz = [d['goals_scored'] for d in goz_data]
+    sot_goz = [d['shots_on_target'] for d in goz_data]
+    fig_attack.add_trace(go.Bar(
+        x=x_att, y=goals_goz, name='Goals (Göz)',
+        marker_color='#fbbf24', text=_bar_text(goals_goz),
+        textfont=dict(color='white', size=11),
+        textposition='outside', cliponaxis=False,
+        hovertemplate='Goals scored: %{y}<extra></extra>',
+    ))
+    fig_attack.add_trace(go.Scatter(x=x_att, y=sot_goz, name='SOT (Göz)', 
+                                    line=dict(color='#fcd34d', width=2), mode='lines+markers',
+                                    hovertemplate='Shots on target: %{y}<extra></extra>'))
+    _add_last_value_label(fig_attack, x_att, sot_goz, "SOT", '#fcd34d')
     if compare_team and comp_data:
         x_att2 = [d['week'] for d in comp_data]
-        fig_attack.add_trace(go.Bar(x=x_att2, y=[d['goals_scored'] for d in comp_data], name=f'Goals ({compare_team})', marker_color='#0ea5e9'))
-        fig_attack.add_trace(go.Scatter(x=x_att2, y=[d['shots_on_target'] for d in comp_data], name=f'Shots on Target ({compare_team})', 
-                                        line=dict(color='#7dd3fc', width=2), mode='lines+markers'))
+        goals_comp = [d['goals_scored'] for d in comp_data]
+        sot_comp = [d['shots_on_target'] for d in comp_data]
+        comp_label = _short_team_label(compare_team, 10)
+        fig_attack.add_trace(go.Bar(
+            x=x_att2, y=goals_comp, name=f'Goals ({comp_label})',
+            marker_color='#0ea5e9', text=_bar_text(goals_comp),
+            textfont=dict(color='white', size=11),
+            textposition='outside', cliponaxis=False,
+            hovertemplate='Goals scored: %{y}<extra></extra>',
+        ))
+        fig_attack.add_trace(go.Scatter(x=x_att2, y=sot_comp, name=f'SOT ({comp_label})', 
+                                        line=dict(color='#7dd3fc', width=2), mode='lines+markers',
+                                        hovertemplate='Shots on target: %{y}<extra></extra>'))
+        _add_last_value_label(fig_attack, x_att2, sot_comp, f"SOT {comp_label}", '#7dd3fc')
         
     fig_attack.update_layout(
              title="Attacking Efficiency (Goals & SOT)", title_font=dict(color='white', size=14),
              paper_bgcolor='#1e1e1e', plot_bgcolor='#1e1e1e',
-             margin=dict(l=20, r=20, t=50, b=60),
+             margin=dict(l=48, r=96, t=78, b=48),
              xaxis=dict(title="Week", color='#888', showgrid=False, tickmode='linear', dtick=1),
              yaxis=dict(title="Count", color='#888', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
              height=300, hovermode='x unified', barmode='group',
-             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(color='white', size=11))
+             legend=_readable_legend(1.04),
     )
 
     # 3 Standard metric charts
