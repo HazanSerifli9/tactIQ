@@ -66,4 +66,4 @@ Core stack:
 - **Dash** + **dash-bootstrap-components** + **plotly** — web app and interactive charts
 - **pandas**, **numpy**, **scipy**, **pyarrow** — data processing and parquet I/O
 - **matplotlib**, **seaborn**, **mplsoccer**, **highlight-text**, **Pillow** — static pitch plots and rendering
-- **scikit-learn**, **xgboost** — custom xG model training/inference
+
