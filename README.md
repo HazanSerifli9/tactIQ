@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 - Match event data as `.parquet` files under `raw_data/`
 - Team logos under `assets/` and `göztepehub/assets/`
-- Optional trained xG model under `utils/`: `tactiq_xg_model.json`
+
 
 ## Running
 
