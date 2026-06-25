@@ -61,6 +61,16 @@ def _add_last_value_label(fig, x_values, y_values, label, color, suffix="", deci
     )
 
 
+def _ordinal(n):
+    if n is None:
+        return "N/A"
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def _record_badge(label, rec):
     total = rec['W'] + rec['D'] + rec['L']
     win_pct = round(rec['W'] / total * 100) if total else 0
@@ -552,6 +562,29 @@ def _build_team_form_tab(compare_team):
     # 1. Fetch Lite Data for PPG
     lite_matches = extract_fixture_data(lite=True)
     all_weeks = sorted(list(set(m['week'] for m in lite_matches)))
+    current_standings = calculate_standings(lite_matches)
+    ppg_rank_data = {}
+    if not current_standings.empty:
+        current_standings = current_standings.copy()
+        current_standings['PPG'] = current_standings.apply(
+            lambda row: round(row['Points'] / row['Played'], 2) if row['Played'] else 0,
+            axis=1,
+        )
+        current_standings['PPG_Rank'] = current_standings['PPG'].rank(
+            ascending=False,
+            method='min',
+        ).astype(int)
+        league_size = len(current_standings)
+        ppg_rank_data = {
+            row['Team']: {
+                'ppg': row['PPG'],
+                'rank': row['PPG_Rank'],
+                'played': int(row['Played']),
+                'points': int(row['Points']),
+                'league_size': league_size,
+            }
+            for _, row in current_standings.iterrows()
+        }
     
     goz_ppg, comp_ppg = [], []
     valid_weeks_ppg = []
@@ -717,8 +750,66 @@ def _build_team_form_tab(compare_team):
     fig_control = make_figure("Control & Dominance (Pass Accuracy %)", "Accuracy %", "pass_accuracy", name1="Göztepe", name2=compare_team)
     fig_foul = make_figure("Aggression (Fouls Committed)", "Fouls", "fouls", name1="Göztepe", name2=compare_team, is_bar=True)
 
+    def ppg_summary_card(team, color):
+        data = ppg_rank_data.get(team, {})
+        ppg = data.get('ppg', 0)
+        rank = data.get('rank')
+        league_size = data.get('league_size', 0)
+        played = data.get('played', 0)
+        points = data.get('points', 0)
+        return html.Div([
+            html.Div(_short_team_label(team, 22), style={
+                "fontSize": "0.72rem", "fontWeight": "800",
+                "textTransform": "uppercase", "letterSpacing": "0.8px",
+                "color": color, "marginBottom": "8px",
+            }),
+            html.Div(f"{ppg:.2f}", style={
+                "fontSize": "2rem", "fontWeight": "900",
+                "color": "white", "lineHeight": "1",
+            }),
+            html.Div("Points Per Game", style={
+                "fontSize": "0.72rem", "color": "#888",
+                "marginTop": "5px",
+            }),
+            html.Div(
+                f"{_ordinal(rank)} of {league_size} in league",
+                style={"fontSize": "0.82rem", "color": color, "fontWeight": "800", "marginTop": "8px"},
+            ),
+            html.Div(f"{points} points from {played} matches", style={
+                "fontSize": "0.7rem", "color": "#888", "marginTop": "4px",
+            }),
+        ], style={
+            "flex": "1", "minWidth": "220px", "textAlign": "center",
+            "background": "rgba(14,18,24,0.82)",
+            "border": f"1px solid {color}55",
+            "borderRadius": "10px", "padding": "18px 16px",
+        })
+
+    ppg_summary_cards = [
+        ppg_summary_card('Göztepe Spor Kulübü', '#fbbf24')
+    ]
+    if compare_team:
+        ppg_summary_cards.append(ppg_summary_card(compare_team, '#0ea5e9'))
+
     
     return html.Div([
+        html.Div([
+            html.Div("CURRENT LEAGUE PPG", style={
+                "textAlign": "center", "fontSize": "0.68rem",
+                "letterSpacing": "2px", "textTransform": "uppercase",
+                "color": "#fbbf24", "fontWeight": "800", "marginBottom": "12px",
+            }),
+            html.Div(ppg_summary_cards, style={
+                "display": "flex", "gap": "14px", "flexWrap": "wrap",
+                "justifyContent": "center",
+            }),
+        ], style={
+            "maxWidth": "920px", "margin": "0 auto 20px",
+            "padding": "18px",
+            "background": "rgba(255,255,255,0.02)",
+            "border": "1px solid rgba(255,255,255,0.08)",
+            "borderRadius": "12px",
+        }),
         dbc.Row([
             dbc.Col(html.Div(dcc.Graph(figure=fig_ppg, config={'displayModeBar': False}), style={"border": "1px solid #333", "borderRadius": "8px", "overflow": "hidden"}), md=12, style={"marginBottom": "20px"})
         ]),

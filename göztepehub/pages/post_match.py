@@ -1000,7 +1000,7 @@ def _build_h2h_section(rival, opp_name, active_tab, selected_file=None, transiti
 
         elif active_tab == "set-pieces-tab":
             try:
-                from pages.rival_scout import _build_set_pieces as _build_rival_set_pieces
+                from göztepehub.pages.rival_scout import _build_set_pieces as _build_rival_set_pieces
                 tab_widgets = [
                     _build_rival_set_pieces([(fn, df)], GOZTEPE, goz_short)
                 ]

@@ -5,6 +5,7 @@ from utils.data import get_match_dataframe
 from utils.wyscout_loader import get_wyscout_match_stats
 import utils.visuals as visuals
 import utils.metrics as metrics
+import utils.analysis as analysis
 import utils.tempo_data as tempo_data
 import utils.tempo_visuals as tempo_visuals
 
@@ -225,6 +226,174 @@ def layout(match_id=None):
     def team_label(name, side):
         return html.Div(clean_name(name), className=f"mr-team-tag mr-team-tag--{side}")
 
+    def _truthy_flag(value):
+        return str(value).strip().lower() in {"1", "true", "yes", "si", "y"}
+
+    def _set_piece_summary(team):
+        sp_data = analysis.get_set_pieces(df, team)
+        corners = len(sp_data.get("corners", []))
+        free_kicks = len(sp_data.get("free_kicks", []))
+        penalties = len(sp_data.get("penalties", []))
+
+        corner_goals = 0
+        free_kick_goals = 0
+        penalty_goals = 0
+        goal_events = []
+        goals_df = df[(df["team_name"] == team) & (df["event"] == "Goal")]
+        for _, goal in goals_df.iterrows():
+            is_corner = (
+                _truthy_flag(goal.get("From corner")) or
+                _truthy_flag(goal.get("From Corner"))
+            )
+            is_penalty = _truthy_flag(goal.get("Penalty"))
+            is_free_kick = (
+                _truthy_flag(goal.get("Free kick")) or
+                _truthy_flag(goal.get("Free Kick")) or
+                _truthy_flag(goal.get("Set piece")) or
+                _truthy_flag(goal.get("Set Piece"))
+            )
+
+            if is_corner:
+                corner_goals += 1
+                goal_type = "Corner"
+            elif is_penalty:
+                penalty_goals += 1
+                goal_type = "Penalty"
+            elif is_free_kick:
+                free_kick_goals += 1
+                goal_type = "Free kick"
+            else:
+                continue
+
+            goal_events.append({
+                "type": goal_type,
+                "player": goal.get("player_name", "Unknown") or "Unknown",
+                "minute": int(goal.get("time_min") or 0),
+                "x": goal.get("x"),
+                "y": goal.get("y"),
+            })
+
+        # Some feeds mark penalty attempts in the attempt row, not the goal row.
+        penalties_df = sp_data.get("penalties")
+        penalty_attempt_goals = (
+            len(penalties_df[penalties_df["event"] == "Goal"])
+            if penalties_df is not None and not penalties_df.empty else 0
+        )
+        if penalty_attempt_goals > penalty_goals and penalties_df is not None:
+            for _, penalty in penalties_df[penalties_df["event"] == "Goal"].iterrows():
+                goal_events.append({
+                    "type": "Penalty",
+                    "player": penalty.get("player_name", "Unknown") or "Unknown",
+                    "minute": int(penalty.get("time_min") or 0),
+                    "x": penalty.get("x"),
+                    "y": penalty.get("y"),
+                })
+        penalty_goals = max(penalty_goals, penalty_attempt_goals)
+
+        return {
+            "corners": corners,
+            "free_kicks": free_kicks,
+            "penalties": penalties,
+            "total": corners + free_kicks + penalties,
+            "corner_goals": corner_goals,
+            "free_kick_goals": free_kick_goals,
+            "penalty_goals": penalty_goals,
+            "goals": corner_goals + free_kick_goals + penalty_goals,
+            "goal_events": goal_events,
+        }
+
+    home_set_pieces = _set_piece_summary(home_team)
+    away_set_pieces = _set_piece_summary(away_team)
+
+    def _set_piece_stat_box(label, value, color):
+        return html.Div([
+            html.Div(label, style={
+                "fontSize": "0.62rem", "fontWeight": "700",
+                "textTransform": "uppercase", "letterSpacing": "0.5px",
+                "color": "var(--text-secondary)",
+            }),
+            html.Div(str(value), style={
+                "fontSize": "1.55rem", "fontWeight": "900", "color": color,
+                "lineHeight": "1.1",
+            }),
+        ], style={
+            "padding": "10px", "background": "rgba(255,255,255,0.035)",
+            "border": "1px solid var(--border-color)", "borderRadius": "8px",
+            "textAlign": "center", "minWidth": "92px", "flex": "1",
+        })
+
+    def _set_piece_summary_pane(team, side, summary):
+        main_color = "var(--accent-gold)" if side == "home" else "#e5e7eb"
+        return html.Div([
+            team_label(team, side),
+            html.Div([
+                _set_piece_stat_box("Set Pieces", summary["total"], main_color),
+                _set_piece_stat_box("Set-Piece Goals", summary["goals"], "#22c55e"),
+            ], style={"display": "flex", "gap": "10px", "marginBottom": "10px"}),
+            html.Div([
+                html.Span(f"Corners {summary['corners']}"),
+                html.Span(f"Dangerous FKs {summary['free_kicks']}"),
+                html.Span(f"Penalties {summary['penalties']}"),
+            ], style={
+                "display": "flex", "gap": "8px", "flexWrap": "wrap",
+                "fontSize": "0.72rem", "color": "var(--text-secondary)",
+            }),
+            html.Div([
+                html.Span(f"Corner goals {summary['corner_goals']}"),
+                html.Span(f"FK goals {summary['free_kick_goals']}"),
+                html.Span(f"Penalty goals {summary['penalty_goals']}"),
+            ], style={
+                "display": "flex", "gap": "8px", "flexWrap": "wrap",
+                "fontSize": "0.72rem", "color": "var(--text-secondary)",
+                "marginTop": "6px",
+            }),
+            html.Div("SET-PIECE GOAL LOG", style={
+                "fontSize": "0.62rem", "fontWeight": "800",
+                "letterSpacing": "0.5px", "color": main_color,
+                "marginTop": "12px", "marginBottom": "6px",
+            }) if summary["goal_events"] else None,
+            html.Div([
+                html.Div([
+                    html.Span(f"{goal['minute']}'", style={
+                        "fontWeight": "900", "color": main_color,
+                    }),
+                    html.Span(goal["type"], style={
+                        "fontWeight": "800", "color": "#22c55e",
+                    }),
+                    html.Span(goal["player"], style={
+                        "fontWeight": "700", "color": "white",
+                        "overflow": "hidden", "textOverflow": "ellipsis",
+                        "whiteSpace": "nowrap",
+                    }),
+                    html.Span(
+                        f"x{float(goal['x']):.1f} y{float(goal['y']):.1f}"
+                        if goal.get("x") is not None and goal.get("y") is not None else "",
+                        style={"color": "var(--text-secondary)", "fontSize": "0.66rem"},
+                    ),
+                ], style={
+                    "display": "grid",
+                    "gridTemplateColumns": "34px 76px 1fr auto",
+                    "gap": "8px",
+                    "alignItems": "center",
+                    "padding": "6px 0",
+                    "borderTop": "1px solid rgba(255,255,255,0.06)" if idx else "none",
+                    "fontSize": "0.72rem",
+                }) for idx, goal in enumerate(summary["goal_events"])
+            ], style={
+                "marginTop": "2px",
+                "padding": "0 8px",
+                "background": "rgba(255,255,255,0.025)",
+                "border": "1px solid var(--border-color)",
+                "borderRadius": "8px",
+            }) if summary["goal_events"] else html.Div(
+                "No set-piece goals in this match.",
+                style={
+                    "fontSize": "0.7rem", "color": "var(--text-secondary)",
+                    "marginTop": "10px",
+                }
+            ),
+        ], className="mr-dual-col__pane")
+
     def dual_section(title, description, h_key, a_key):
         return html.Div([
             html.H3(title, className="mr-section-title"),
@@ -294,6 +463,17 @@ def layout(match_id=None):
 
     # ── SET PIECES ─────────────────────────────────────────────────────────────
     phase_set_pieces = html.Div([
+        html.Div([
+            html.H3("Set-Piece Match Summary", className="mr-section-title"),
+            html.P(
+                "Corners, dangerous free kicks, penalties, and goals scored from those situations.",
+                className="mr-section-desc",
+            ),
+            html.Div([
+                _set_piece_summary_pane(home_team, "home", home_set_pieces),
+                _set_piece_summary_pane(away_team, "away", away_set_pieces),
+            ], className="mr-dual-col"),
+        ], className="visualization-card mr-card"),
         dual_section("Corner Kicks",
                      "Corner delivery origins and landing zones — shows delivery patterns and target areas.",
                      f"{home_team}_corners", f"{away_team}_corners"),

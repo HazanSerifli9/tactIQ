@@ -33,6 +33,15 @@ Both apps share `utils/` (analysis + visualizations) and `shared/` (logger, cons
 
 Requires Python 3.10+.
 
+Clone the repository:
+
+```bash
+git clone https://github.com/HazanSerifli9/tactIQ.git
+cd tactIQ
+```
+
+Then create a virtual environment and install dependencies:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -66,4 +75,3 @@ Core stack:
 - **Dash** + **dash-bootstrap-components** + **plotly** — web app and interactive charts
 - **pandas**, **numpy**, **scipy**, **pyarrow** — data processing and parquet I/O
 - **matplotlib**, **seaborn**, **mplsoccer**, **highlight-text**, **Pillow** — static pitch plots and rendering
-

@@ -7,12 +7,15 @@ import io
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from dash import html, dcc, callback, Input, Output
+from dash import html, dcc, callback, Input, Output, ALL
 import dash_bootstrap_components as dbc
 
 from utils.data import get_data_dir, TEAM_LOGOS
 
-dash.register_page(__name__, path='/rival-scout', title='Göztepe Hub | Rival Scout')
+try:
+    dash.register_page(__name__, path='/rival-scout', title='Göztepe Hub | Rival Scout')
+except Exception:
+    pass
 
 GOZTEPE = 'Göztepe Spor Kulübü'
 
@@ -594,8 +597,62 @@ def _build_possession_line_height(matches, team_name, rival_label):
         import traceback
         traceback.print_exc()
 
-def _build_offensive(matches, team_name, rival_label):
+def _build_offensive(matches, team_name, rival_label, goal_origin_filter='all', selected_goal_value=None):
     sections = []
+    current_goal_filter = goal_origin_filter or 'all'
+
+    def _goal_sequence_filter_card(goal_options=None, selected_value=None):
+        goal_options = goal_options or []
+        return html.Div(style={
+            'padding': '10px 12px',
+            'border': '1px solid var(--border-color)',
+            'borderRadius': '8px',
+            'background': 'rgba(255,255,255,0.025)',
+            'marginBottom': '12px',
+        }, children=[
+            html.Div('GOAL SEQUENCE FILTER', style={
+                'fontSize': '0.64rem',
+                'fontWeight': '800',
+                'color': GOLD,
+                'letterSpacing': '0.8px',
+                'marginBottom': '8px',
+            }),
+            dcc.Dropdown(
+                id={'type': 'scout-goal-origin-filter', 'scope': 'goal-card'},
+                options=[
+                    {'label': 'All', 'value': 'all'},
+                    {'label': 'Open Play', 'value': 'open_play'},
+                    {'label': 'Cross', 'value': 'cross'},
+                    {'label': 'Fast Break', 'value': 'fast_break'},
+                    {'label': 'Corner', 'value': 'corner'},
+                    {'label': 'Free Kick', 'value': 'free_kick'},
+                    {'label': 'Penalty', 'value': 'penalty'},
+                    {'label': 'Set Piece', 'value': 'set_piece'},
+                ],
+                value=current_goal_filter,
+                clearable=False,
+                searchable=False,
+                className='goz-dropdown scout-goal-dropdown',
+                style={'fontSize': '0.76rem'},
+            ),
+            html.Div('GOAL', style={
+                'fontSize': '0.64rem',
+                'fontWeight': '800',
+                'color': GOLD,
+                'letterSpacing': '0.8px',
+                'margin': '10px 0 8px',
+            }) if goal_options else None,
+            dcc.Dropdown(
+                id={'type': 'scout-goal-sequence-selector', 'scope': 'goal-card'},
+                options=goal_options,
+                value=selected_value,
+                clearable=False,
+                searchable=False,
+                className='goz-dropdown scout-goal-dropdown',
+                style={'fontSize': '0.76rem'},
+            ) if goal_options else None,
+        ])
+
     try:
         shot_img, shots = _draw_shot_map(matches, team_name)
         goals = [s for s in shots if s['event'] == 'Goal']
@@ -616,14 +673,20 @@ def _build_offensive(matches, team_name, rival_label):
                     _bar('Goals', _safe_pct(len(goals), len(shots)), GOLD),
                     _bar('Saved', _safe_pct(len([s for s in shots if s['event'] == 'Saved Shot']), len(shots)), GREEN),
                     _bar('Miss / Post', _safe_pct(len([s for s in shots if s['event'] in {'Miss', 'Post'}]), len(shots)), RED),
-                ], md=4),
+                ], md=3),
                 dbc.Col([
-                    html.Img(src=shot_img, style={'width': '100%', 'maxHeight': '430px', 'objectFit': 'contain', 'borderRadius': '8px'}),
+                    html.Img(src=shot_img, style={
+                        'width': '100%',
+                        'maxHeight': '660px',
+                        'objectFit': 'contain',
+                        'borderRadius': '8px',
+                        'display': 'block',
+                    }),
                     html.Div('★ Goal  ● Saved  ○ Miss  ◆ Post', style={
                         'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
                         'textAlign': 'center', 'marginTop': '4px',
                     }),
-                ], md=8),
+                ], md=9),
             ]),
             title=f'{rival_label} — Offensive Phase Shot Map', icon='⚔'
         )
@@ -632,18 +695,18 @@ def _build_offensive(matches, team_name, rival_label):
         pass
 
     try:
-        seq_img, goal_chains = _draw_goal_sequences_filtered(matches, team_name)
+        seq_img, goal_chains = _draw_goal_sequences_filtered(
+            matches,
+            team_name,
+            origin_filter=goal_origin_filter or 'all',
+            selected_goal_value=selected_goal_value,
+        )
         if seq_img:
-            sequence_rows = []
-            for item in goal_chains[:4]:
-                chain = item['chain']
-                sequence_rows.append(html.Div(style={
-                    'display': 'flex', 'justifyContent': 'space-between',
-                    'padding': '6px 0', 'borderBottom': '1px solid rgba(255,255,255,0.05)',
-                }, children=[
-                    html.Span(item['match'], style={'fontSize': '0.75rem', 'color': 'var(--text-secondary)'}),
-                    html.Span(f"{item.get('origin', 'open_play').replace('_', ' ')} · {len(chain)} actions", style={'fontSize': '0.75rem', 'fontWeight': '700', 'color': GOLD}),
-                ]))
+            selected_value = goal_chains[0].get('value') if goal_chains else None
+            goal_options = [
+                {'label': f"{item.get('minute', 0)}' - {item.get('player', 'Goal')} ({item.get('origin', 'open_play').replace('_', ' ')})", 'value': item.get('value')}
+                for item in goal_chains
+            ]
             seq_card = _card(
                 dbc.Row([
                     dbc.Col([
@@ -651,19 +714,39 @@ def _build_offensive(matches, team_name, rival_label):
                             'fontSize': '0.7rem', 'fontWeight': '700', 'color': GOLD,
                             'letterSpacing': '1px', 'marginBottom': '8px',
                         }),
-                        html.Div(sequence_rows),
-                    ], md=4),
+                        _goal_sequence_filter_card(goal_options, selected_value),
+                    ], md=3),
                     dbc.Col([
-                        html.Img(src=seq_img, style={'width': '100%', 'maxHeight': '430px', 'objectFit': 'contain', 'borderRadius': '8px'}),
+                        html.Img(src=seq_img, style={
+                            'width': '100%',
+                            'maxHeight': '560px',
+                            'objectFit': 'contain',
+                            'borderRadius': '8px',
+                            'display': 'block',
+                        }),
                         html.Div('Last attacking actions in the 10 seconds before each goal', style={
                             'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
                             'textAlign': 'center', 'marginTop': '4px',
                         }),
-                    ], md=8),
+                    ], md=9),
                 ]),
                 title='Goal Sequence Map', icon='🥅'
             )
             sections.append(seq_card)
+        else:
+            origin_label = (goal_origin_filter or 'all').replace('_', ' ')
+            sections.append(_card(
+                html.Div([
+                    _goal_sequence_filter_card(),
+                    html.Div(
+                        f"No goal sequences found for {origin_label}.",
+                        className='goz-card-desc',
+                        style={'textAlign': 'center', 'padding': '18px'},
+                    ),
+                ]),
+                title='Goal Sequence Map',
+                icon='🥅',
+            ))
     except Exception:
         pass
 
@@ -673,10 +756,9 @@ def _build_offensive(matches, team_name, rival_label):
 
     if len(sections) >= 2:
         top_row = dbc.Row([
-            dbc.Col(sections[0], md=6),
-            dbc.Col(sections[1], md=6),
+            dbc.Col(sections[0], md=12),
         ], className='g-3', style={'marginBottom': '12px'})
-        rest = sections[2:]
+        rest = sections[1:]
         return html.Div([top_row] + rest)
 
     return html.Div(sections) if sections else html.Div(className='goz-form-section', children=[
@@ -1219,7 +1301,7 @@ def _draw_pitch_title(ax, title, color=GOLD):
     ax.set_title(title, color=color, fontsize=11, fontweight='bold', pad=10)
 
 def _draw_shot_map(matches, team_name):
-    p, fig, ax = _make_pitch(half=True, figsize=(11, 7))
+    p, fig, ax = _make_pitch(half=True, figsize=(7.2, 8.8))
     shots = []
     for _, df in matches:
         for _, row in df[(df['team_name'] == team_name) & (df['event'].isin(SHOT_EVENTS))].iterrows():
@@ -1262,7 +1344,7 @@ def _goal_origin_label(goal_row, chain):
         return 'cross'
     return 'open_play'
 
-def _draw_goal_sequences_filtered(matches, team_name, origin_filter='all', max_seconds=10):
+def _draw_goal_sequences_filtered(matches, team_name, origin_filter='all', max_seconds=10, selected_goal_value=None):
     goal_chains = []
     for fname, df in matches:
         match_info = _match_summary(fname, df, team_name)
@@ -1291,28 +1373,51 @@ def _draw_goal_sequences_filtered(matches, team_name, origin_filter='all', max_s
                 origin = _goal_origin_label(row, raw_chain)
                 if origin_filter not in (None, 'all') and origin != origin_filter:
                     continue
-                goal_chains.append({'match': match_label, 'chain': chain[-8:], 'origin': origin})
+                minute = int(row.get('time_min') or 0)
+                player = row.get('player_name', '?') or '?'
+                event_id = row.get('event_id', i)
+                value = f"{fname}|{event_id}|{minute}|{origin}"
+                goal_chains.append({
+                    'match': match_label,
+                    'chain': chain[-8:],
+                    'origin': origin,
+                    'minute': minute,
+                    'player': player,
+                    'value': value,
+                })
 
     if not goal_chains:
         return None, []
 
+    selected = next(
+        (item for item in goal_chains if item.get('value') == selected_goal_value),
+        goal_chains[0],
+    )
+    ordered_chains = [selected] + [item for item in goal_chains if item.get('value') != selected.get('value')]
+
     p, fig, ax = _make_pitch(figsize=(11, 7))
-    colors = [GOLD, BLUE, GREEN, PURPLE]
-    for idx, item in enumerate(goal_chains[:4]):
-        chain = item['chain']
-        color = colors[idx % len(colors)]
-        for a, b in zip(chain, chain[1:]):
-            ax.annotate('', xy=(b['x'], b['y']), xytext=(a['x'], a['y']),
-                        arrowprops=dict(arrowstyle='->', color=color, lw=1.7, alpha=0.75),
-                        zorder=5)
+    chain = selected['chain']
+    for idx, (a, b) in enumerate(zip(chain, chain[1:]), start=1):
+        ax.annotate('', xy=(b['x'], b['y']), xytext=(a['x'], a['y']),
+                    arrowprops=dict(arrowstyle='->', color=GOLD, lw=2.0, alpha=0.82),
+                    zorder=5)
+        mx = (a['x'] + b['x']) / 2.0
+        my = (a['y'] + b['y']) / 2.0
+        ax.text(mx, my, str(idx), color='#111827', fontsize=7, fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='circle,pad=0.18', facecolor=GOLD, edgecolor='none', alpha=0.9),
+                zorder=7)
+    if len(chain) > 1:
         p.scatter([c['x'] for c in chain[:-1]], [c['y'] for c in chain[:-1]], ax=ax,
-                  color=color, s=32, alpha=0.85, edgecolors='white', linewidths=0.3,
-                  label=None)
-        goal = chain[-1]
-        p.scatter([goal['x']], [goal['y']], ax=ax, color=GOLD, marker='*', s=150,
-                  edgecolors='white', linewidths=0.7)
-    _draw_pitch_title(ax, 'GOAL SEQUENCES')
-    return _fig_b64(fig), goal_chains
+                  color=BLUE, s=46, alpha=0.92, edgecolors='white', linewidths=0.4)
+    goal = chain[-1]
+    p.scatter([goal['x']], [goal['y']], ax=ax, color=GOLD, marker='*', s=190,
+              edgecolors='white', linewidths=0.8)
+    _draw_pitch_title(
+        ax,
+        f"{selected.get('player', 'Goal')} {selected.get('minute', 0)}' · {selected.get('origin', 'open_play').replace('_', ' ')}",
+    )
+    return _fig_b64(fig), ordered_chains
 
 def _estimate_def_block(team: pd.DataFrame, phase: str):
     def_ev = team[team['event'].isin(DEF_EVENTS)].dropna(subset=['x', 'y'])
@@ -1512,6 +1617,10 @@ def _compute_set_piece_details(matches, team_name):
     data = {k: [] for k in ['corners', 'free_kicks', 'goal_kicks', 'penalties', 'shots']}
     for _, df in matches:
         team = df[df['team_name'] == team_name]
+        teams = df['team_name'].dropna().unique().tolist()
+        opponent = next((t for t in teams if t != team_name), '?')
+        week = int(df['week'].iloc[0]) if 'week' in df.columns and not df.empty else None
+        description = str(df['description'].iloc[0]) if 'description' in df.columns and not df.empty else ''
         penalty_times = []
         for _, row in _corner_events(team).iterrows():
             start = _safe_xy(row)
@@ -1543,6 +1652,10 @@ def _compute_set_piece_details(matches, team_name):
                 'ex': end[0] if end else None, 'ey': end[1] if end else None,
                 'event': event, 'player': row.get('player_name', '?') or '?',
                 'outcome': row.get('outcome'),
+                'minute': int(row.get('time_min') or 0),
+                'opponent': _short(opponent),
+                'week': week,
+                'description': description,
                 'goal_mouth_y': row.get(GOAL_MOUTH_Y_COL),
                 'goal_mouth_z': row.get(GOAL_MOUTH_Z_COL),
             }
@@ -1568,6 +1681,9 @@ def _compute_set_piece_details(matches, team_name):
                 rec['x'], rec['y'] = 88.5, 50.0
                 data['penalties'].append(rec)
             if event in SHOT_EVENTS and _has_qualifier(row, ['Set piece', 'From corner', 'Free kick', 'Penalty']):
+                rec['is_corner'] = _has_qualifier(row, ['From corner'])
+                rec['is_fk'] = _has_qualifier(row, ['Free kick']) or _has_qualifier(row, ['Set piece'])
+                rec['is_penalty'] = _has_qualifier(row, ['Penalty'])
                 data['shots'].append(rec)
     return data
 
@@ -2343,6 +2459,32 @@ def _build_set_pieces(matches, team_name, rival_label):
     sections = []
     try:
         details = _compute_set_piece_details(matches, team_name)
+        
+        corner_goal_shots = [
+            s for s in details['shots']
+            if s.get('event') == 'Goal' and s.get('is_corner')
+        ]
+        corner_goals = len(corner_goal_shots)
+        fk_goal_shots = [
+            s for s in details['shots']
+            if s.get('event') == 'Goal' and s.get('is_fk') and not s.get('is_corner')
+        ]
+        fk_goals = len(fk_goal_shots)
+        penalty_goal_shots = [p for p in details['penalties'] if p.get('event') == 'Goal']
+        penalty_goals = len(penalty_goal_shots)
+        set_piece_goal_rows = (
+            [('Corner', GOLD, goal) for goal in corner_goal_shots]
+            + [('Free kick', BLUE, goal) for goal in fk_goal_shots]
+            + [('Penalty', RED, goal) for goal in penalty_goal_shots]
+        )
+
+        def _goal_location_text(goal):
+            x = _safe_float(goal.get('x'))
+            y = _safe_float(goal.get('y'))
+            minute = goal.get('minute', 0)
+            if x is None or y is None:
+                return f"{minute}'"
+            return f"{minute}' · x{x:.1f} y{y:.1f}"
 
         set_piece_cards = [
             ('Corners', 'corners', GOLD, True, False),
@@ -2353,9 +2495,20 @@ def _build_set_pieces(matches, team_name, rival_label):
         maps = []
         for title, key, color, half, penalties in set_piece_cards:
             img = _draw_set_piece_map(details[key], title.upper(), color=color, half=half, penalties=penalties)
+            
+            goals_for_key = 0
+            if key == 'corners':
+                goals_for_key = corner_goals
+            elif key == 'free_kicks':
+                goals_for_key = fk_goals
+            elif key == 'penalties':
+                goals_for_key = penalty_goals
+
+            goals_text = f" · {goals_for_key} goals scored" if key in ['corners', 'free_kicks', 'penalties'] else ""
+
             maps.append(dbc.Col([
                 html.Img(src=img, style={'width': '100%', 'borderRadius': '8px'}),
-                html.Div(f"{len(details[key])} {title.lower()} recorded", style={
+                html.Div(f"{len(details[key])} {title.lower()} recorded{goals_text}", style={
                     'fontSize': '0.65rem', 'color': 'var(--text-secondary)',
                     'textAlign': 'center', 'marginTop': '4px',
                 }),
@@ -2365,11 +2518,65 @@ def _build_set_pieces(matches, team_name, rival_label):
             html.Div(children=[
                 html.Div(style={'display': 'flex', 'gap': '8px', 'flexWrap': 'wrap', 'marginBottom': '14px'}, children=[
                     _pill('Corners', len(details['corners']), GOLD),
+                    _pill('Corner Goals', corner_goals, GOLD),
                     _pill('Dangerous FKs', len(details['free_kicks']), BLUE),
+                    _pill('FK Goals', fk_goals, BLUE),
                     _pill('Goal Kicks', len(details['goal_kicks']), GREEN),
                     _pill('Penalties', len(details['penalties']), RED),
+                    _pill('Penalty Goals', penalty_goals, RED),
                 ]),
                 dbc.Row(maps),
+                html.Div(style={
+                    'marginTop': '4px',
+                    'padding': '12px',
+                    'border': '1px solid var(--border-color)',
+                    'borderRadius': '8px',
+                    'background': 'rgba(255,255,255,0.02)',
+                }, children=[
+                    html.Div('SET-PIECE GOAL LOG', style={
+                        'fontSize': '0.68rem', 'fontWeight': '800',
+                        'color': GOLD, 'letterSpacing': '0.8px',
+                        'marginBottom': '8px',
+                    }),
+                    html.Div([
+                        html.Div(style={
+                            'display': 'grid',
+                            'gridTemplateColumns': '82px minmax(0, 1fr) auto auto',
+                            'gap': '10px',
+                            'alignItems': 'center',
+                            'padding': '7px 0',
+                            'borderTop': '1px solid rgba(255,255,255,0.06)' if idx else 'none',
+                        }, children=[
+                            html.Div(goal_type, style={
+                                'color': color,
+                                'fontWeight': '800',
+                                'fontSize': '0.68rem',
+                                'textTransform': 'uppercase',
+                            }),
+                            html.Div([
+                                html.Div(goal.get('player', '?'), style={
+                                    'color': 'white', 'fontWeight': '800',
+                                    'fontSize': '0.76rem',
+                                }),
+                                html.Div(
+                                    goal.get('description') or f"vs {goal.get('opponent', '?')}",
+                                    style={'color': 'var(--text-secondary)', 'fontSize': '0.66rem'}
+                                ),
+                            ]),
+                            html.Div(
+                                f"W{goal.get('week')}" if goal.get('week') is not None else "Week ?",
+                                style={'color': GOLD, 'fontWeight': '800', 'fontSize': '0.68rem'}
+                            ),
+                            html.Div(
+                                _goal_location_text(goal),
+                                style={'color': color, 'fontWeight': '800', 'fontSize': '0.68rem'}
+                            ),
+                        ]) for idx, (goal_type, color, goal) in enumerate(set_piece_goal_rows)
+                    ] if set_piece_goal_rows else html.Div(
+                        'No set-piece goals in this match/sample.',
+                        style={'fontSize': '0.7rem', 'color': 'var(--text-secondary)'}
+                    )),
+                ]),
             ]),
             title='Set Piece Delivery Maps', icon='📍'
         ))
@@ -2402,8 +2609,11 @@ def _build_set_pieces(matches, team_name, rival_label):
                 ]),
                 title='Penalty Goal Mouth', icon='🥅'
             ))
-    except Exception:
-        pass
+    except Exception as exc:
+        return html.Div(className='goz-form-section', children=[
+            html.Div('Set-piece data could not be loaded.', className='goz-card-title'),
+            html.Div(str(exc), className='goz-card-desc'),
+        ])
 
     return html.Div(sections) if sections else html.Div(className='goz-form-section', children=[
         html.Div('No set piece data available.', className='goz-card-desc')
@@ -2504,7 +2714,6 @@ def layout():
                     labelClassName='pm-tab-radio-label',
                 ),
             ]),
-
             # ── Tab content ───────────────────────────────────
             html.Div(id='scout-tab-content', style={'marginTop': '8px'}),
             ]),
@@ -2585,9 +2794,11 @@ def update_scout_report(rival_label, selected_file):
     [Input('scout-rival-selector', 'value'),
      Input('scout-match-selector', 'value'),
      Input('scout-tab',            'value'),
-     Input('scout-transition-filter', 'value')],
+     Input('scout-transition-filter', 'value'),
+     Input({'type': 'scout-goal-origin-filter', 'scope': ALL}, 'value'),
+     Input({'type': 'scout-goal-sequence-selector', 'scope': ALL}, 'value')],
 )
-def update_scout_content(rival_label, selected_file, active_tab, transition_filter):
+def update_scout_content(rival_label, selected_file, active_tab, transition_filter, goal_origin_filter_values, goal_sequence_values):
     if not rival_label or not selected_file:
         return html.Div(), html.Div()
 
@@ -2606,9 +2817,11 @@ def update_scout_content(rival_label, selected_file, active_tab, transition_filt
 
     rival_display = _short(team_name)
     match_card = _build_selected_match_card(fname, df, team_name, rival_display)
+    goal_origin_filter = goal_origin_filter_values[-1] if goal_origin_filter_values else 'all'
+    selected_goal_value = goal_sequence_values[-1] if goal_sequence_values else None
 
     if   active_tab == 'projected-xi': content = _build_projected_xi(all_matches, team_name, rival_display)
-    elif active_tab == 'off':        content = _build_offensive(single, team_name, rival_display)
+    elif active_tab == 'off':        content = _build_offensive(single, team_name, rival_display, goal_origin_filter, selected_goal_value)
     elif active_tab == 'def':        content = _build_defensive(single, team_name, rival_display)
     elif active_tab == 'off-trans':  content = _build_off_transitions(single, team_name, rival_display, transition_filter)
     elif active_tab == 'def-trans':  content = _build_def_transitions(single, team_name, rival_display, transition_filter)

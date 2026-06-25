@@ -536,41 +536,60 @@ def plot_set_pieces(df, team_name, sp_type="corners"):
     ax_side.set_ylim(0, 1)
     ax_side.axis('off')
     
+    # Calculate goals from corners/free kicks
+    goals_count = 0
+    if not df.empty:
+        goals_df = df[(df['team_name'] == team_name) & (df['event'] == 'Goal')]
+        for _, r in goals_df.iterrows():
+            if sp_type == "corners":
+                if (_is_truthy_flag(r.get('From corner')) or _is_truthy_flag(r.get('From Corner'))):
+                    goals_count += 1
+            else:
+                is_fk = (_is_truthy_flag(r.get('Free kick')) or _is_truthy_flag(r.get('Free Kick')) or 
+                         _is_truthy_flag(r.get('Set piece')) or _is_truthy_flag(r.get('Set Piece')))
+                is_corner = (_is_truthy_flag(r.get('From corner')) or _is_truthy_flag(r.get('From Corner')))
+                if is_fk and not is_corner:
+                    goals_count += 1
+
     # Title
     ax_side.text(0.5, 0.94, title_text.upper(), fontsize=14, fontweight='bold', color=TACTIQ_ACCENT, ha='center')
     ax_side.plot([0.15, 0.85], [0.91, 0.91], color='#444', linewidth=1.0)
     if plotted_kicks != total_kicks:
-        ax_side.text(0.5, 0.885, f"{total_kicks - plotted_kicks} corner missing landing coordinates",
+        ax_side.text(0.5, 0.885, f"{total_kicks - plotted_kicks} corner missing landing coordinates" if sp_type == "corners" else f"{total_kicks - plotted_kicks} fk missing landing coordinates",
                      fontsize=8, color='#888', ha='center')
     
+    # KPI 0: Goals Scored
+    ax_side.text(0.5, 0.83, f"{goals_count}", fontsize=30, fontweight='900', color='#22c55e' if goals_count > 0 else 'white', ha='center')
+    ax_side.text(0.5, 0.79, "Goals Scored", fontsize=9, color='#888', ha='center')
+
     # KPI 1: Completion
     comp_pct = round(successful_kicks / total_kicks * 100) if total_kicks else 0
-    ax_side.text(0.5, 0.82, f"{comp_pct}%", fontsize=32, fontweight='900', color='#22c55e' if comp_pct > 40 else '#fbbf24', ha='center')
-    ax_side.text(0.5, 0.77, "Delivery Completion Rate", fontsize=9, color='#888', ha='center')
+    ax_side.text(0.5, 0.71, f"{comp_pct}%", fontsize=24, fontweight='bold', color='white', ha='center')
+    ax_side.text(0.5, 0.67, "Delivery Completion Rate", fontsize=9, color='#888', ha='center')
     
     # KPI 2: Danger Zone Entries
     box_pct = round(box_entries / total_kicks * 100) if total_kicks else 0
-    ax_side.text(0.5, 0.65, f"{box_pct}%", fontsize=24, fontweight='bold', color='white', ha='center')
-    ax_side.text(0.5, 0.61, "Deliveries into 18-Yard Box", fontsize=9, color='#888', ha='center')
+    ax_side.text(0.5, 0.59, f"{box_pct}%", fontsize=24, fontweight='bold', color='white', ha='center')
+    ax_side.text(0.5, 0.55, "Deliveries into 18-Yard Box", fontsize=9, color='#888', ha='center')
     
     # KPI 3: 6-Yard Box Danger
     six_pct = round(six_yard_entries / total_kicks * 100) if total_kicks else 0
-    ax_side.text(0.5, 0.49, f"{six_pct}%", fontsize=24, fontweight='bold', color='white', ha='center')
-    ax_side.text(0.5, 0.45, "Deliveries into 6-Yard Box", fontsize=9, color='#888', ha='center')
+    ax_side.text(0.5, 0.47, f"{six_pct}%", fontsize=24, fontweight='bold', color='white', ha='center')
+    ax_side.text(0.5, 0.43, "Deliveries into 6-Yard Box", fontsize=9, color='#888', ha='center')
     
     if sp_type == "corners":
-        ax_side.text(0.5, 0.35, "PRIMARY TAKERS", fontsize=9, color='#777', fontweight='bold', ha='center')
-        ax_side.plot([0.3, 0.7], [0.335, 0.335], color='#333', linewidth=0.5)
+        ax_side.text(0.5, 0.33, "PRIMARY TAKERS", fontsize=9, color='#777', fontweight='bold', ha='center')
+        ax_side.plot([0.3, 0.7], [0.31, 0.31], color='#333', linewidth=0.5)
         sorted_takers = sorted(takers.items(), key=lambda x: x[1], reverse=True)[:2]
-        y_taker = 0.30
+        y_taker = 0.27
         for name, cnt in sorted_takers:
             ax_side.text(0.16, y_taker, get_short_name(name), fontsize=8.5, color='#eee', ha='left')
             ax_side.text(0.84, y_taker, f"{cnt}", fontsize=8.5, color=TACTIQ_ACCENT, ha='right', fontweight='bold')
             y_taker -= 0.035
 
-        ax_side.text(0.5, 0.22, "DELIVERY TYPE", fontsize=9, color='#777', fontweight='bold', ha='center')
-        ax_side.plot([0.3, 0.7], [0.205, 0.205], color='#333', linewidth=0.5)
-        y_style = 0.17
+        ax_side.text(0.5, 0.19, "DELIVERY TYPE", fontsize=9, color='#777', fontweight='bold', ha='center')
+        ax_side.plot([0.3, 0.7], [0.17, 0.17], color='#333', linewidth=0.5)
+        y_style = 0.14
         for label, color in [('Inswinger', '#22c55e'), ('Outswinger', '#f97316'), ('Straight', '#60a5fa')]:
             cnt = delivery_styles.get(label, 0)
             ax_side.text(0.18, y_style, label, fontsize=8.5, color='#eee', ha='left')

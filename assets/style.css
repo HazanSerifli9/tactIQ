@@ -1472,6 +1472,23 @@ a {
     border-color: rgba(251, 191, 36, 0.38) !important;
 }
 
+.scout-goal-dropdown .Select-value-label,
+.scout-goal-dropdown .Select-placeholder,
+.scout-goal-dropdown .Select-input input,
+.scout-goal-dropdown .Select-option {
+    color: #ffffff !important;
+}
+
+.scout-goal-dropdown .Select-option.is-focused {
+    background: rgba(59, 130, 246, 0.28) !important;
+    color: #ffffff !important;
+}
+
+.scout-goal-dropdown .Select-option.is-selected {
+    background: rgba(251, 191, 36, 0.18) !important;
+    color: #ffffff !important;
+}
+
 /* Date picker override */
 .goz-date-picker .DateInput_input {
     background: rgba(255, 255, 255, 0.05) !important;

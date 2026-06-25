@@ -51,6 +51,7 @@ _LEAGUE_CACHE = {'df': None, 'timestamp': 0, 'building': False, 'error': None}
 _LEAGUE_CACHE_LOCK = threading.Lock()
 _SEASON_STATS_CACHE = {}
 _PENALTY_RANK_CACHE = {'data': None, 'timestamp': 0}
+_SET_PIECE_GOAL_RANK_CACHE = {'data': None, 'timestamp': 0}
 
 def _load_team_matches(team_name):
     data_dir = get_data_dir()
@@ -447,6 +448,7 @@ def _get_season_stats(team_name):
             'total': total_freekicks, 'direct_shots': direct_fk_shots, 'direct_goals': direct_fk_goals,
             'direct_on_target': direct_fk_on_target, 'placements': direct_fk_placements,
         },
+        'set_piece_goals': total_corner_goals + direct_fk_goals + scored_penalties,
         'goal_sequences': goal_sequences,
         'transitions_att': transitions_map_att,
         'transitions_def': transitions_map_def,
@@ -558,6 +560,10 @@ def _build_league_benchmarks():
         from utils.xg_model import predict_xg
     except ImportError:
         predict_xg = lambda d: d
+    from göztepehub.utils.buildup_analysis import (
+        analyze_buildup_for_match,
+        get_opponent_buildup_analysis,
+    )
 
     data_dir = get_data_dir()
     files = [f for f in os.listdir(data_dir) if f.endswith('.parquet')]
@@ -595,8 +601,8 @@ def _build_league_benchmarks():
             n_pen = len(penalty_attempts)
             n_pen_scored = sum(1 for row in penalty_attempts if row.get('event') == 'Goal')
             
-            # Buildup outcomes
-            from göztepehub.utils.buildup_analysis import analyze_buildup_for_match
+            # Buildup outcomes for fallback benchmark values. Displayed build-up
+            # rankings are aligned below with the opponent-season helper.
             b_total = b_f3 = b_shot = b_goal = b_turnover = b_danger = 0
             try:
                 buildup_res = analyze_buildup_for_match(df, team)
@@ -630,7 +636,23 @@ def _build_league_benchmarks():
     rows = []
     for team, a in acc.items():
         m = max(a['m'], 1)
-        b_tot = max(a['b_total'], 1)
+        _, buildup_season = get_opponent_buildup_analysis(team)
+        if buildup_season:
+            b_total = buildup_season.get('total_buildups', 0)
+            buildup_outcomes = buildup_season.get('outcomes_10s', {})
+            b_f3 = buildup_outcomes.get('f3_entry', 0)
+            b_shot = buildup_outcomes.get('shot', 0)
+            b_goal = buildup_outcomes.get('goal', 0)
+            b_turnover = buildup_outcomes.get('turnover', 0)
+            b_danger = buildup_outcomes.get('opp_danger', 0)
+        else:
+            b_total = a['b_total']
+            b_f3 = a['b_f3']
+            b_shot = a['b_shot']
+            b_goal = a['b_goal']
+            b_turnover = a['b_turnover']
+            b_danger = a['b_danger']
+        b_tot = max(b_total, 1)
         rows.append(dict(team=team,
             passes_pg=a['p']/m, pass_acc=a['s']/max(a['p'],1)*100,
             shots_pg=a['sh']/m, goals_pg=a['g']/m,
@@ -640,11 +662,11 @@ def _build_league_benchmarks():
             ball_lost_pg=a['lost']/m,
             penalty_total=a['pen'],
             penalty_conv_pct=a['pen_scored']/max(a['pen'], 1)*100,
-            buildup_f3_pct=a['b_f3']/b_tot*100,
-            buildup_shot_pct=a['b_shot']/b_tot*100,
-            buildup_goal_pct=a['b_goal']/b_tot*100,
-            buildup_turnover_pct=a['b_turnover']/b_tot*100,
-            buildup_danger_pct=a['b_danger']/b_tot*100))
+            buildup_f3_pct=b_f3/b_tot*100,
+            buildup_shot_pct=b_shot/b_tot*100,
+            buildup_goal_pct=b_goal/b_tot*100,
+            buildup_turnover_pct=b_turnover/b_tot*100,
+            buildup_danger_pct=b_danger/b_tot*100))
 
     result = pd.DataFrame(rows).set_index('team')
     return result
@@ -1271,6 +1293,83 @@ def _penalty_total_rank(team):
             last_value = value
         rank_lookup[team_name] = last_rank
     return rank_lookup.get(team), len(ranked)
+
+
+def _rank_from_count_map(data, team):
+    if team not in data:
+        return None, None
+    ranked = sorted(data.items(), key=lambda item: (-item[1], item[0]))
+    rank_lookup = {}
+    last_value = None
+    last_rank = 0
+    for idx, (team_name, value) in enumerate(ranked, start=1):
+        if value != last_value:
+            last_rank = idx
+            last_value = value
+        rank_lookup[team_name] = last_rank
+    return rank_lookup.get(team), len(ranked)
+
+
+def _set_piece_goal_rank(team):
+    if time.time() - _SET_PIECE_GOAL_RANK_CACHE.get('timestamp', 0) < 3600:
+        data = _SET_PIECE_GOAL_RANK_CACHE.get('data') or {}
+    else:
+        try:
+            data = {}
+            for filename in os.listdir(get_data_dir()):
+                if not filename.endswith('.parquet'):
+                    continue
+                try:
+                    df = pd.read_parquet(os.path.join(get_data_dir(), filename))
+                    if 'team_name' not in df.columns:
+                        continue
+                    records = df.to_dict('records')
+                    for team_name in df['team_name'].dropna().unique().tolist():
+                        if team_name == GOZTEPE:
+                            continue
+                        data.setdefault(team_name, 0)
+                        penalty_goals = sum(
+                            1 for _, row in _collect_penalty_attempts(records, team_name)
+                            if row.get('event') == 'Goal'
+                        )
+                        corner_goals = 0
+                        direct_fk_goals = 0
+                        for i, row in enumerate(records):
+                            if row.get('team_name') != team_name:
+                                continue
+
+                            if row.get('event') == 'Corner' or _parse_opta_bool(row.get('Corner taken')):
+                                start_time = (row.get('time_min') or 0) * 60 + (row.get('time_sec') or 0)
+                                for offset in range(1, 7):
+                                    if i + offset >= len(records):
+                                        break
+                                    next_row = records[i + offset]
+                                    next_time = (
+                                        (next_row.get('time_min') or 0) * 60
+                                        + (next_row.get('time_sec') or 0)
+                                    )
+                                    if next_time - start_time > 10:
+                                        break
+                                    if next_row.get('team_name') == team_name and next_row.get('event') == 'Goal':
+                                        corner_goals += 1
+                                        break
+
+                            if (
+                                row.get('event') == 'Goal'
+                                and row.get('type_id') in [13, 14, 15, 16]
+                                and _parse_opta_bool(row.get('Free kick'))
+                            ):
+                                direct_fk_goals += 1
+
+                        data[team_name] += corner_goals + direct_fk_goals + penalty_goals
+                except Exception:
+                    continue
+            _SET_PIECE_GOAL_RANK_CACHE['data'] = data
+            _SET_PIECE_GOAL_RANK_CACHE['timestamp'] = time.time()
+        except Exception:
+            return None, None
+
+    return _rank_from_count_map(data, team)
 
 
 def _build_transitions_risk_pitch(transitions_map, is_att=True):
@@ -2642,6 +2741,15 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         p_conv = round(p_scored / max(p_total, 1) * 100, 1)
         p_rank, p_rank_total = _penalty_total_rank(opponent)
         p_rank_text = f"#{p_rank}/{p_rank_total}" if p_rank is not None else "loading"
+        set_piece_goals = stats.get(
+            'set_piece_goals',
+            corners.get('total_goals', 0) + fk_goals + p_scored,
+        )
+        sp_goal_rank, sp_goal_rank_total = _set_piece_goal_rank(opponent)
+        sp_goal_rank_text = (
+            f"#{sp_goal_rank}/{sp_goal_rank_total}"
+            if sp_goal_rank is not None else "loading"
+        )
         penalty_rows = sorted(
             p_placements,
             key=lambda item: (item.get('week') or 0, item.get('minute') or 0, item.get('num') or 0)
@@ -2650,6 +2758,30 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         mid_col = dbc.Col(html.Div(className="goz-form-section", children=[
             html.Div(className="goz-section-header", children=[
                 html.Span("FREEKICKS & PENALTIES", className="goz-card-title", style={"fontSize": "1.05rem"}),
+            ]),
+            html.Div(style={"marginBottom": "16px"}, children=[
+                html.Div("SET-PIECE GOAL OUTPUT", style={
+                    "fontSize": "0.68rem", "fontWeight": "800",
+                    "color": _GOLD, "marginBottom": "8px", "letterSpacing": "0.5px"
+                }),
+                html.Div(style={
+                    "display": "flex", "justifyContent": "space-between",
+                    "fontSize": "0.78rem", "marginBottom": "8px"
+                }, children=[
+                    html.Span("Total Set-Piece Goals", style={"color": "var(--text-secondary)"}),
+                    html.Span(f"{set_piece_goals} · rank {sp_goal_rank_text}", style={
+                        "fontWeight": "bold", "color": _GREEN if set_piece_goals > 0 else "white"
+                    })
+                ]),
+                html.Div(style={
+                    "display": "flex", "justifyContent": "space-between",
+                    "fontSize": "0.72rem", "color": "var(--text-secondary)"
+                }, children=[
+                    html.Span("Corner / Direct FK / Penalty"),
+                    html.Span(f"{corners.get('total_goals', 0)} / {fk_goals} / {p_scored}", style={
+                        "fontWeight": "700", "color": "white"
+                    })
+                ]),
             ]),
             html.Div(style={"marginBottom": "16px"}, children=[
                 html.Div("FREE KICK CONVERSION", style={"fontSize": "0.68rem", "fontWeight": "800", "color": _GOLD, "marginBottom": "8px", "letterSpacing": "0.5px"}),
@@ -2779,6 +2911,12 @@ def _build_tab_content(active_tab, stats, opp_name, opponent):
         fk_conv = round(fk_goals / max(fk_shots, 1) * 100, 1) if fk_shots > 0 else 0
 
         summary_cards = dbc.Row([
+            dbc.Col(html.Div(className="coach-brief-item", style={"minHeight": "auto", "padding": "14px 18px", "textAlign": "center"}, children=[
+                html.Div("SET-PIECE GOALS", className="coach-brief-label", style={"fontSize": "0.62rem", "marginBottom": "4px"}),
+                html.Div(f"{set_piece_goals}", className="coach-brief-text",
+                         style={"fontSize": "1.6rem", "fontWeight": "700", "color": _GREEN}),
+                html.Div(f"League rank: {sp_goal_rank_text}", style={"fontSize": "0.66rem", "color": "var(--text-secondary)"}),
+            ]), md=3, sm=6),
             dbc.Col(html.Div(className="coach-brief-item", style={"minHeight": "auto", "padding": "14px 18px", "textAlign": "center"}, children=[
                 html.Div("PENALTIES", className="coach-brief-label", style={"fontSize": "0.62rem", "marginBottom": "4px"}),
                 html.Div(f"{p_scored}/{p_total}", className="coach-brief-text",
